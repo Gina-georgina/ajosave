@@ -63,7 +63,7 @@ export const GET = withErrorHandler(async (req: NextRequest, ctx: unknown) => {
     }
   }
 
-  const messages = await getMessages(circleId, { limit, before });
+  const messages = await getMessages(circleId, { limit, before }, userId);
 
   return NextResponse.json<ApiResponse<CircleMessage[]>>(
     { success: true, data: messages },
@@ -101,7 +101,8 @@ export const POST = withErrorHandler(
       }
 
       // Parse and validate request body
-      const { content } = await req.json();
+      const body = await req.json();
+      const { content, parentMessageId } = body;
 
       if (!content || typeof content !== "string" || content.trim().length === 0) {
         return NextResponse.json<ApiResponse<never>>(
@@ -117,7 +118,12 @@ export const POST = withErrorHandler(
         );
       }
 
-      const message = await postMessage(circleId, userId, content);
+      const message = await postMessage(
+        circleId,
+        userId,
+        content,
+        typeof parentMessageId === "string" ? parentMessageId : undefined
+      );
 
       // Fire-and-forget broadcast; a failed broadcast does not roll back the DB insert
       broadcastChatMessage(circleId, message);

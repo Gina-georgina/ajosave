@@ -68,6 +68,27 @@ export interface Payout {
 }
 
 // ─── Chat ─────────────────────────────────────────────────────────────────────
+
+/** Allowed emoji reactions (at minimum the 4 required by issue #211). */
+export const ALLOWED_REACTIONS = ["👍", "❤️", "😂", "🙏"] as const;
+export type ReactionEmoji = (typeof ALLOWED_REACTIONS)[number];
+
+export interface MessageReaction {
+  id: string;
+  messageId: string;
+  userId: string;
+  emoji: ReactionEmoji;
+  createdAt: Date;
+}
+
+/** Aggregated reaction count for one emoji on a message. */
+export interface ReactionCount {
+  emoji: ReactionEmoji;
+  count: number;
+  /** Whether the currently-authenticated user has reacted with this emoji. */
+  reacted: boolean;
+}
+
 export interface CircleMessage {
   id: string;
   circleId: string;
@@ -75,6 +96,12 @@ export interface CircleMessage {
   displayName: string;
   content: string;
   createdAt: Date;
+  /** null = top-level message; set = a reply inside a thread */
+  parentMessageId?: string | null;
+  /** Aggregated reaction counts for this message (populated by API). */
+  reactions?: ReactionCount[];
+  /** Number of direct replies to this message (populated by API). */
+  replyCount?: number;
 }
 
 // ─── Circle discovery filters ─────────────────────────────────────────────────
