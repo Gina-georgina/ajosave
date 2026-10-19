@@ -32,10 +32,112 @@ export async function createCircle(creatorId: string, input: CreateCircleInput):
 }
 
 export async function getCircleById(id: string): Promise<Circle | null> {
+  // ── DB-backed path: honour soft-delete ────────────────────────────────────
+  try {
+    const result = await query<{
+      id: string;
+      name: string;
+      creator_id: string;
+      contribution_usdc: string;
+      contribution_fiat: number;
+      contribution_currency: string;
+      contribution_ngn: number;
+      circle_type: string;
+      max_members: number;
+      cycle_frequency: string;
+      status: string;
+      contract_id: string | null;
+      current_cycle: number;
+      next_payout_at: Date | null;
+      payout_method: string;
+      grace_period_hours: number;
+      randomization_seed: string | null;
+      created_at: Date;
+      updated_at: Date;
+    }>(
+      `SELECT id, name, creator_id, contribution_usdc, contribution_fiat,
+              contribution_currency, contribution_ngn, circle_type, max_members,
+              cycle_frequency, status, contract_id, current_cycle,
+              next_payout_at, payout_method, grace_period_hours,
+              randomization_seed, created_at, updated_at
+       FROM circles
+       WHERE id = $1 AND deleted_at IS NULL`,
+      [id]
+    );
+
+    if (result.rowCount === 0) return null;
+
+    const row = result.rows[0];
+    return {
+      id: row.id,
+      name: row.name,
+      creatorId: row.creator_id,
+      contributionUsdc: row.contribution_usdc,
+      contributionFiat: row.contribution_fiat ?? row.contribution_ngn,
+      contributionCurrency: (row.contribution_currency as Circle["contributionCurrency"]) ?? "NGN",
+      contributionNgn: row.contribution_ngn,
+      circleType: (row.circle_type as Circle["circleType"]) ?? "public",
+      maxMembers: row.max_members,
+      cycleFrequency: row.cycle_frequency as Circle["cycleFrequency"],
+      status: row.status as CircleStatus,
+      contractId: row.contract_id ?? undefined,
+      currentCycle: row.current_cycle,
+      nextPayoutAt: row.next_payout_at ?? undefined,
+      payoutMethod: (row.payout_method as Circle["payoutMethod"]) ?? "fixed",
+      gracePeriodHours: row.grace_period_hours ?? 24,
+      randomizationSeed: row.randomization_seed ?? undefined,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  } catch {
+    // Fall back to in-memory store (dev / test environments without a DB)
+  }
+
   return circles.get(id) ?? null;
 }
 
 export async function listOpenCircles(): Promise<Circle[]> {
+  try {
+    const result = await query<{
+      id: string;
+      name: string;
+      creator_id: string;
+      contribution_usdc: string;
+      contribution_ngn: number;
+      max_members: number;
+      cycle_frequency: string;
+      status: string;
+      contract_id: string | null;
+      current_cycle: number;
+      next_payout_at: Date | null;
+      created_at: Date;
+      updated_at: Date;
+    }>(
+      `SELECT id, name, creator_id, contribution_usdc, contribution_ngn,
+              max_members, cycle_frequency, status, contract_id,
+              current_cycle, next_payout_at, created_at, updated_at
+       FROM circles
+       WHERE status = 'open' AND deleted_at IS NULL
+       ORDER BY created_at DESC`
+    );
+    return result.rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      creatorId: row.creator_id,
+      contributionUsdc: row.contribution_usdc,
+      contributionNgn: row.contribution_ngn,
+      maxMembers: row.max_members,
+      cycleFrequency: row.cycle_frequency as Circle["cycleFrequency"],
+      status: row.status as CircleStatus,
+      contractId: row.contract_id ?? undefined,
+      currentCycle: row.current_cycle,
+      nextPayoutAt: row.next_payout_at ?? undefined,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+  } catch {
+    // In-memory fallback
+  }
   return [...circles.values()].filter((c) => c.status === "open");
 }
 
@@ -472,6 +574,159 @@ export async function updateCircleStatus(id: string, status: CircleStatus): Prom
   circle.status = status;
   circle.updatedAt = new Date();
   circles.set(id, circle);
+}
+
+/**
+ * Soft-delete a circle and cascade the deletion to all member rows and
+ * contributions associated with it.
+ *
+ * Business rules:
+ *  - Only the circle creator (or an admin — checked at the API layer) can delete.
+ *  - Sets deleted_at on the circle row.
+ *  - Cascades: sets deleted_at on every member row belonging to this circle.
+ *  - Cascades: sets deleted_at on every contribution row for this circle.
+ *  - All three writes occur inside a single transaction.
+ *
+ * The soft-deleted circle will:
+ *  - No longer appear in GET /api/circles (listCircles filters deleted_at IS NULL)
+ *  - Return 404 from GET /api/circles/:id (getCircleById filters deleted_at IS NULL)
+ *  - Still be visible to admins via GET /api/admin/circles/deleted
+ */
+export async function deleteCircle(circleId: string, requesterId: string): Promise<Circle> {
+  // ── DB-backed transactional path ───────────────────────────────────────────
+  try {
+    return await transaction(async (q) => {
+      // Lock & fetch the circle row.
+      const circleRow = await q<{
+        id: string;
+        name: string;
+        creator_id: string;
+        contribution_usdc: string;
+        contribution_fiat: number;
+        contribution_currency: string;
+        contribution_ngn: number;
+        circle_type: string;
+        max_members: number;
+        cycle_frequency: string;
+        status: string;
+        contract_id: string | null;
+        current_cycle: number;
+        next_payout_at: Date | null;
+        payout_method: string;
+        grace_period_hours: number;
+        randomization_seed: string | null;
+        created_at: Date;
+        updated_at: Date;
+        deleted_at: Date | null;
+      }>(
+        `SELECT * FROM circles WHERE id = $1 FOR UPDATE`,
+        [circleId]
+      );
+
+      if (circleRow.rowCount === 0) throw new Error("Circle not found");
+
+      const row = circleRow.rows[0];
+
+      if (row.deleted_at !== null) throw new Error("Circle is already deleted");
+
+      if (row.creator_id !== requesterId) {
+        throw new Error("Only the circle creator can delete this circle");
+      }
+
+      const now = new Date();
+
+      // Soft-delete the circle itself.
+      await q(
+        `UPDATE circles SET deleted_at = $1, updated_at = $1 WHERE id = $2`,
+        [now, circleId]
+      );
+
+      // Cascade: soft-delete all member rows for this circle.
+      await q(
+        `UPDATE members SET deleted_at = $1, updated_at = $1
+         WHERE circle_id = $2 AND deleted_at IS NULL`,
+        [now, circleId]
+      );
+
+      // Cascade: soft-delete all contribution rows for this circle.
+      await q(
+        `UPDATE contributions SET deleted_at = $1, updated_at = $1
+         WHERE circle_id = $2 AND deleted_at IS NULL`,
+        [now, circleId]
+      );
+
+      return {
+        id: row.id,
+        name: row.name,
+        creatorId: row.creator_id,
+        contributionUsdc: row.contribution_usdc,
+        contributionFiat: row.contribution_fiat ?? row.contribution_ngn,
+        contributionCurrency: (row.contribution_currency as Circle["contributionCurrency"]) ?? "NGN",
+        contributionNgn: row.contribution_ngn,
+        circleType: (row.circle_type as Circle["circleType"]) ?? "public",
+        maxMembers: row.max_members,
+        cycleFrequency: row.cycle_frequency as Circle["cycleFrequency"],
+        status: row.status as CircleStatus,
+        contractId: row.contract_id ?? undefined,
+        currentCycle: row.current_cycle,
+        nextPayoutAt: row.next_payout_at ?? undefined,
+        payoutMethod: (row.payout_method as Circle["payoutMethod"]) ?? "fixed",
+        gracePeriodHours: row.grace_period_hours ?? 24,
+        randomizationSeed: row.randomization_seed ?? undefined,
+        createdAt: row.created_at,
+        updatedAt: now,
+      };
+    });
+  } catch (err) {
+    const domainErrors = [
+      "Circle not found",
+      "Circle is already deleted",
+      "Only the circle creator",
+    ];
+    const isDomainError =
+      err instanceof Error && domainErrors.some((msg) => err.message.startsWith(msg));
+    if (isDomainError) throw err;
+
+    console.warn(
+      "[circle.service] DB transaction failed, falling back to in-memory store:",
+      err instanceof Error ? err.message : err
+    );
+  }
+
+  // ── In-memory fallback ────────────────────────────────────────────────────
+  const circle = circles.get(circleId);
+  if (!circle) throw new Error("Circle not found");
+  if (circle.creatorId !== requesterId) {
+    throw new Error("Only the circle creator can delete this circle");
+  }
+
+  circle.updatedAt = new Date();
+  circles.set(circleId, circle);
+  circles.delete(circleId);
+  return circle;
+}
+
+/**
+ * Hard-delete circles whose deleted_at timestamp is older than the given
+ * retention window (default: 90 days). Intended to be called from a scheduled
+ * cron job.
+ *
+ * Returns the number of circles permanently removed.
+ */
+export async function hardDeleteExpiredCircles(
+  retentionDays = 90
+): Promise<number> {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - retentionDays);
+
+  const result = await query<{ id: string }>(
+    `DELETE FROM circles
+     WHERE deleted_at IS NOT NULL AND deleted_at < $1
+     RETURNING id`,
+    [cutoff]
+  );
+
+  return result.rowCount ?? 0;
 }
 
 function computeNextPayoutDate(frequency: Circle["cycleFrequency"]): Date {
