@@ -10,19 +10,33 @@
 # Rule IDs are from the ZAP passive and active scanner rule sets.
 # See https://www.zaproxy.org/docs/alerts/ for the full list.
 #
-# ─── Next.js framework false positives ───────────────────────────────────────
-# 10038 — Content Security Policy (CSP) header not set
-#   Next.js sets CSP via next.config.mjs headers; ZAP sometimes misses it.
-10038	WARN		
+# ─── Security headers — now ENFORCED (fixed in next.config.mjs, issue #195) ──
+# 10038 — Content-Security-Policy header not set
+#   CSP is now set in next.config.mjs for all routes. Fail the scan if missing.
+10038	FAIL		
+# 10035 — Strict-Transport-Security header not set
+#   HSTS is now set: max-age=31536000; includeSubDomains; preload
+10035	FAIL		
+# 10020 — X-Frame-Options header not set / allows framing (clickjacking)
+#   X-Frame-Options: DENY is set. Fail if missing.
+10020	FAIL		
+# 10021 — X-Content-Type-Options header missing
+#   nosniff is now set on all routes. Fail if missing.
+10021	FAIL		
 # 10063 — Permissions Policy header not set
-#   Managed in next.config.mjs
-10063	WARN		
+#   Managed in next.config.mjs. Fail if missing.
+10063	FAIL		
+# 10110 — Referrer-Policy header not set
+#   strict-origin-when-cross-origin is now set. Fail if missing.
+10110	FAIL		
+
+# ─── Next.js framework — remaining acceptable deviations ─────────────────────
 # 10096 — Timestamp disclosure (server header)
 #   Next.js development mode exposes timestamps in headers; not applicable in prod.
 10096	IGNORE		
-# 10021 — X-Content-Type-Options header missing
-#   Next.js adds this automatically; ZAP can flag preflight OPTIONS responses.
-10021	WARN		
+# 10055 — CSP scanner (content policy evaluation)
+#   Staging environment may have slightly relaxed CSP for dev tooling; warn only.
+10055	WARN		
 
 # ─── Stellar / crypto wallet noise ───────────────────────────────────────────
 # 40012 — Cross Site Scripting (Reflected)
@@ -74,11 +88,3 @@
 
 # 40024 — SQL injection (SQLite specific)
 40024	WARN		
-
-# 10055 — CSP scanner
-#   Staging environment may have relaxed CSP; warn but don't fail.
-10055	WARN		
-
-# 10035 — Strict-Transport-Security header not set
-#   Staging may not have HTTPS configured; warn only.
-10035	WARN		
