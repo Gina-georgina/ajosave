@@ -53,3 +53,11 @@
     display: none;
   }
 }
+
+/* ─── Hide top navbar on mobile when bottom tab bar is present ─────────────── */
+/* This targets the same breakpoint as BottomTabBar.module.css                  */
+@media (max-width: 767px) {
+  .header {
+    display: none;
+  }
+}
