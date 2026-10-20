@@ -25,6 +25,7 @@ import {
   sendCirclePausedEmail,
   sendCircleResumedEmail,
   sendCircleCompletedEmail,
+  sendInviteRedeemedEmail,
 } from "@/lib/email";
 
 interface UserDetails {
@@ -461,6 +462,33 @@ export async function notifyCircleResumed(
   });
 
   await Promise.allSettled(notifications);
+}
+
+/**
+ * Notify a circle creator that one of their invite links was redeemed.
+ * Invite links are single-use, so this confirms the invite has been consumed.
+ * Notification failures are logged and never thrown.
+ */
+export async function notifyInviteRedeemed(
+  issuerId: string,
+  circleName: string,
+  _redeemerId: string
+): Promise<void> {
+  const userDetails = await getUserDetails(issuerId);
+  if (!userDetails) return;
+
+  if (userDetails.emailNotificationsEnabled && userDetails.email) {
+    try {
+      await sendInviteRedeemedEmail(
+        userDetails.email,
+        userDetails.displayName,
+        circleName,
+        issuerId
+      );
+    } catch (error) {
+      console.error(`Failed to send invite redeemed email to ${issuerId}:`, error);
+    }
+  }
 }
 
 /**
