@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth";
 import { getCirclesByUser } from "@/server/services/circle.service";
 import { CircleCard } from "@/components/circle/CircleCard";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { OnboardingGate } from "@/components/Onboarding";
 import Link from "next/link";
 import type { Metadata } from "next";
 import styles from "./page.module.css";
@@ -19,10 +20,17 @@ export default async function DashboardPage() {
 
   return (
     <div className={styles.page}>
+      {/* First-time user onboarding tour — renders only until dismissed */}
+      <OnboardingGate />
+
       <div className="container">
         <div className={styles.header}>
           <h1 className={styles.title}>My Circles</h1>
-          <Link href="/circles/create" className="btn btn--accent">
+          <Link
+            href="/circles/create"
+            className="btn btn--accent"
+            data-onboarding="contribute"
+          >
             + New Circle
           </Link>
         </div>
@@ -33,7 +41,7 @@ export default async function DashboardPage() {
             description="You haven't joined any savings circles yet. Browse open circles or create your own to get started."
             illustration="circles"
             ctas={[
-              { label: "Browse circles", href: "/circles", variant: "primary" },
+              { label: "Browse circles", href: "/circles", variant: "primary", "data-onboarding": "browse-circles" },
               { label: "Create a circle", href: "/circles/create", variant: "secondary" },
             ]}
           />

@@ -46,7 +46,11 @@ export function CircleCard({ circle, members, showJoin = false }: CircleCardProp
       </div>
 
       {showJoin && circle.status === "open" && spotsLeft > 0 && (
-        <Link href={`/circles/${circle.id}/join`} className="btn btn--accent btn--sm btn--full">
+        <Link
+          href={`/circles/${circle.id}/join`}
+          className="btn btn--accent btn--sm btn--full"
+          data-onboarding="join-circle"
+        >
           Join Circle — {spotsLeft} spot{spotsLeft !== 1 ? "s" : ""} left
         </Link>
       )}
