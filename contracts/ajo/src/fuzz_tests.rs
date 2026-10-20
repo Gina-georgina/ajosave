@@ -50,7 +50,7 @@ mod fuzz {
 
         let contract_id = env.register_contract(None, AjoContract);
         let client = AjoContractClient::new(&env, &contract_id);
-        client.initialize(&admin, &token_id, &contribution, &max_members, &interval);
+        client.initialize(&admin, &token_id, &admin, &contribution, &max_members, &interval);
 
         let token: TokenClient<'static> = unsafe { std::mem::transmute(token) };
         let client: AjoContractClient<'static> = unsafe { std::mem::transmute(client) };

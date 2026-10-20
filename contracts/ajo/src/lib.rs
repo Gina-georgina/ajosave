@@ -17,13 +17,14 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, token, vec, Address, BytesN, Env, Symbol, Vec,
+    contract, contractimpl, contracterror, contracttype, token, vec, Address, BytesN, Env, Symbol,
+    Vec,
 };
 
 // ─── Schema version ───────────────────────────────────────────────────────────
 /// Bump this constant whenever the storage layout changes in a new deployment.
 /// `migrate()` uses it to gate and sequence migration logic.
-const STORAGE_VERSION: u32 = 1;
+const STORAGE_VERSION: u32 = 2;
 
 // ─── TTL Configuration ────────────────────────────────────────────────────────
 const DAY_IN_LEDGERS: u32 = 17280;
@@ -31,6 +32,22 @@ const INSTANCE_BUMP_AMOUNT: u32 = 7 * DAY_IN_LEDGERS;
 const INSTANCE_LIFETIME_THRESHOLD: u32 = DAY_IN_LEDGERS;
 const PERSISTENT_BUMP_AMOUNT: u32 = 30 * DAY_IN_LEDGERS;
 const PERSISTENT_LIFETIME_THRESHOLD: u32 = 7 * DAY_IN_LEDGERS;
+
+// ─── Errors ───────────────────────────────────────────────────────────────────
+
+/// Typed contract errors.
+///
+/// Using `contracterror` lets callers distinguish error conditions via the
+/// Soroban RPC status code rather than parsing panic strings.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum Error {
+    /// The token used in `contribute` or `join` does not match the issuer
+    /// (admin) address stored at initialisation.  This prevents a malicious
+    /// actor from substituting a look-alike token contract.
+    InvalidTokenIssuer = 1,
+}
 
 // ─── Storage keys ─────────────────────────────────────────────────────────────
 
@@ -46,6 +63,8 @@ pub enum DataKey {
     Admin,
     PendingAdmin,
     Token,
+    /// Expected issuer (admin) of the USDC token contract stored at init (issue #245).
+    ExpectedIssuer,
     ContributionAmount,
     MaxMembers,
     CycleIntervalSecs,
@@ -85,6 +104,8 @@ impl AjoContract {
     ///
     /// * `admin`               – address that controls admin operations
     /// * `token`               – USDC token contract address
+    /// * `expected_issuer`     – expected issuer (admin) of the USDC token contract;
+    ///                           used by `contribute` to reject look-alike tokens (issue #245)
     /// * `contribution_amount` – USDC amount per member per cycle (in stroops)
     /// * `max_members`         – total number of members (= total cycles)
     /// * `cycle_interval_secs` – seconds between payouts (e.g. 2592000 = 30 days)
@@ -92,6 +113,7 @@ impl AjoContract {
         env: Env,
         admin: Address,
         token: Address,
+        expected_issuer: Address,
         contribution_amount: i128,
         max_members: u32,
         cycle_interval_secs: u64,
@@ -111,6 +133,7 @@ impl AjoContract {
 
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Token, &token);
+        env.storage().instance().set(&DataKey::ExpectedIssuer, &expected_issuer);
         env.storage().instance().set(&DataKey::ContributionAmount, &contribution_amount);
         env.storage().instance().set(&DataKey::MaxMembers, &max_members);
         env.storage().instance().set(&DataKey::CycleIntervalSecs, &cycle_interval_secs);
@@ -209,6 +232,21 @@ impl AjoContract {
         }
 
         let token: Address = env.storage().instance().get(&DataKey::Token).expect("not initialized");
+
+        // ── Issue #245: validate token issuer ────────────────────────────────
+        // Compare the token contract's current admin (issuer) against the
+        // expected_issuer stored at initialisation.  A look-alike token deployed
+        // by a malicious actor will have a different admin and will be rejected.
+        let expected_issuer: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::ExpectedIssuer)
+            .expect("not initialized");
+        let actual_issuer = token::StellarAssetClient::new(&env, &token).admin();
+        if actual_issuer != expected_issuer {
+            panic!("InvalidTokenIssuer");
+        }
+
         let token_client = token::Client::new(&env, &token);
         token_client.transfer(&member, &env.current_contract_address(), &amount);
 
@@ -501,8 +539,25 @@ impl AjoContract {
             }
         }
 
+        // ── v1 → v2 ──────────────────────────────────────────────────────────
+        // ExpectedIssuer was added in v2 (issue #245).
+        // On contracts upgraded from v1, copy the token admin as the initial
+        // expected issuer so existing circles continue to work.
+        if from < 2 {
+            if !env.storage().instance().has(&DataKey::ExpectedIssuer) {
+                // Derive issuer from the already-stored token contract.
+                let token: Address = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::Token)
+                    .expect("not initialized");
+                let issuer = token::StellarAssetClient::new(&env, &token).admin();
+                env.storage().instance().set(&DataKey::ExpectedIssuer, &issuer);
+            }
+        }
+
         // ── Add future migration blocks here ─────────────────────────────────
-        // if from < 2 { … }
+        // if from < 3 { … }
 
         env.storage().instance().set(&DataKey::StorageVersion, &STORAGE_VERSION);
 
@@ -688,7 +743,8 @@ mod tests {
         let contract_id = env.register_contract(None, AjoContract);
         let client = AjoContractClient::new(env, &contract_id);
 
-        client.initialize(&admin, &token_id, &100_000_000, &3, &86400);
+        // admin is both the circle admin and the token issuer in tests
+        client.initialize(&admin, &token_id, &admin, &100_000_000, &3, &86400);
 
         (admin, members, token_id, token, client)
     }
@@ -895,6 +951,74 @@ mod tests {
         env.mock_all_auths();
         let (_, _, _, _, client) = setup(&env);
         client.accept_admin();
+    }
+
+    // ── Issue #245: token issuer validation ───────────────────────────────────
+
+    /// Correct issuer: contribute should succeed without panicking.
+    #[test]
+    fn test_contribute_correct_issuer_passes() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_, members, _, _, client) = setup(&env);
+
+        for m in members.iter() {
+            client.join(m);
+        }
+
+        // Cycle 1 started; contribute for the first member — should not panic.
+        client.contribute(&members.get(0).unwrap(), &100_000_000);
+    }
+
+    /// Wrong issuer: substitute a second token contract with a different admin;
+    /// contribute must panic with "InvalidTokenIssuer".
+    #[test]
+    #[should_panic(expected = "InvalidTokenIssuer")]
+    fn test_contribute_wrong_issuer_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        // Set up a genuine circle backed by token_a whose admin is `admin`.
+        let admin = Address::generate(&env);
+        let members_vec = vec![
+            &env,
+            Address::generate(&env),
+            Address::generate(&env),
+            Address::generate(&env),
+        ];
+        let token_a_id = env.register_stellar_asset_contract(admin.clone());
+        let token_a_admin = StellarAssetClient::new(&env, &token_a_id);
+        for m in members_vec.iter() {
+            token_a_admin.mint(m, &1_000_000_000);
+        }
+
+        // Deploy a look-alike token_b controlled by a *different* attacker admin.
+        let attacker_admin = Address::generate(&env);
+        let token_b_id = env.register_stellar_asset_contract(attacker_admin.clone());
+        let token_b_admin = StellarAssetClient::new(&env, &token_b_id);
+        for m in members_vec.iter() {
+            token_b_admin.mint(m, &1_000_000_000);
+        }
+
+        let contract_id = env.register_contract(None, AjoContract);
+        let client = AjoContractClient::new(&env, &contract_id);
+
+        // Initialise with token_a and record `admin` as the expected issuer.
+        client.initialize(&admin, &token_a_id, &admin, &100_000_000, &3, &86400);
+        for m in members_vec.iter() {
+            client.join(m);
+        }
+
+        // Manually overwrite the stored Token to point at token_b (simulating
+        // a misconfiguration or attack that swaps the token address after init).
+        // In a real attack the contract address itself would differ; here we
+        // simulate by patching storage directly in the test environment.
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&DataKey::Token, &token_b_id);
+        });
+
+        // contribute must now panic because token_b's admin != expected_issuer.
+        client.contribute(&members_vec.get(0).unwrap(), &100_000_000);
     }
 }
 

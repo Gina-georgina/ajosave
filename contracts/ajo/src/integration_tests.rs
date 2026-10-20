@@ -52,7 +52,8 @@ mod integration {
         let client = AjoContractClient::new(&env, &contract_id);
 
         let interval: u64 = 86_400; // 1 day
-        client.initialize(&admin, &token_id, &contribution, &max_members, &interval);
+        // admin is also the token issuer (admin of the stellar asset contract)
+        client.initialize(&admin, &token_id, &admin, &contribution, &max_members, &interval);
 
         // SAFETY: The env outlives the fixture; we extend lifetime for convenience in tests.
         let token: TokenClient<'static> = unsafe { std::mem::transmute(token) };
@@ -133,7 +134,7 @@ let (cycle, max, _, completed, _) = client.get_state();
     fn test_double_initialize_panics() {
         let f = setup_fixture(2);
         let token_id = f.env.register_stellar_asset_contract(f.admin.clone());
-        f.client.initialize(&f.admin, &token_id, &100_000_000, &2, &86_400);
+        f.client.initialize(&f.admin, &token_id, &f.admin, &100_000_000, &2, &86_400);
     }
 
     /// initialize: rejects max_members < 2
@@ -146,7 +147,7 @@ let (cycle, max, _, completed, _) = client.get_state();
         let token_id = env.register_stellar_asset_contract(admin.clone());
         let contract_id = env.register_contract(None, AjoContract);
         let client = AjoContractClient::new(&env, &contract_id);
-        client.initialize(&admin, &token_id, &100_000_000, &1, &86_400);
+        client.initialize(&admin, &token_id, &admin, &100_000_000, &1, &86_400);
     }
 
     /// initialize: rejects max_members > 20
@@ -159,7 +160,7 @@ let (cycle, max, _, completed, _) = client.get_state();
         let token_id = env.register_stellar_asset_contract(admin.clone());
         let contract_id = env.register_contract(None, AjoContract);
         let client = AjoContractClient::new(&env, &contract_id);
-        client.initialize(&admin, &token_id, &100_000_000, &21, &86_400);
+        client.initialize(&admin, &token_id, &admin, &100_000_000, &21, &86_400);
     }
 
     /// join: rejects duplicate member
@@ -721,7 +722,7 @@ let (cycle, max, _, completed, _) = client.get_state();
         let token_id = env.register_stellar_asset_contract(admin.clone());
         let contract_id = env.register_contract(None, AjoContract);
         let client = AjoContractClient::new(&env, &contract_id);
-        client.initialize(&admin, &token_id, &0, &3, &86_400);
+        client.initialize(&admin, &token_id, &admin, &0, &3, &86_400);
     }
 
     // ─── payout: circle not started ──────────────────────────────────────────
