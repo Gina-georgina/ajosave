@@ -133,6 +133,8 @@ npm run dev
 
 ### Smart Contract
 
+How the contract, Horizon, USDC, Freighter, and the event indexer fit together is mapped in [docs/STELLAR_INTEGRATION.md](docs/STELLAR_INTEGRATION.md).
+
 ```bash
 npm run contract:build   # Build WASM
 npm run contract:test    # Run Rust tests
