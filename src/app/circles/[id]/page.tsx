@@ -125,6 +125,18 @@ export default async function CircleDetailPage({ params }: Props) {
           </div>
         )}
 
+        {/* Show waitlist card when circle is full and the user is not already a member */}
+        {userId && !isMember && members.length >= circle.maxMembers && (
+          <div style={{ marginBottom: "var(--space-6)" }}>
+            <CircleWaitlist
+              circleId={circle.id}
+              circleName={circle.name}
+              initialIsOnWaitlist={isOnWaitlist}
+              initialPosition={waitlistPosition}
+            />
+          </div>
+        )}
+
         <div className={styles.grid}>
           <div className="card" style={{ gridColumn: "1 / -1" }}>
             <h2 className={styles.sectionTitle}>Payout History</h2>
