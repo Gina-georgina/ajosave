@@ -3,6 +3,8 @@
  *
  * POST /api/admin/circles/:id/payout
  *
+ * Resolves: https://github.com/joekeyz8/ajosave/issues/225
+ *
  * Acceptance criteria (Issue #225):
  *   - Admin-only auth guard (403 for non-admins)
  *   - Validates that the circle is in a payable state before proceeding
