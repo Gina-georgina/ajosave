@@ -74,7 +74,7 @@ start / the feature will not work. **Optional** = has a safe default.
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `TERMII_API_KEY` | **Required in prod** | `""` | Termii API key used to send OTP/SMS. |
+| `TERMII_API_KEY` | **Required in prod** | `""` | Termii API key used to send OTP/SMS. See [sms-notifications.md](sms-notifications.md) for rate limits, failure handling, and key rotation. |
 | `TERMII_SENDER_ID` | Optional | `STELLAR` | Sender ID shown on outgoing SMS. |
 
 ## Email
