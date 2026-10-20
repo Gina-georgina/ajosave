@@ -9,6 +9,11 @@ jest.mock("@/lib/db", () => ({
   transaction: jest.fn(),
 }));
 
+jest.mock("@/lib/logger", () => ({
+  __esModule: true,
+  default: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+}));
+
 const mockGetCircleById = circleService.getCircleById as jest.MockedFunction<
   typeof circleService.getCircleById
 >;

@@ -25,6 +25,7 @@ import {
   type OutboxEvent,
 } from "@/lib/outbox";
 import { notifyPayoutProcessed, notifyPayoutReminder, notifyContributionReminder, notifyMissedContribution } from "@/server/services/notification.service";
+import { mintCertificate } from "@/server/services/certificate.service";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -93,6 +94,38 @@ async function dispatchEvent(event: OutboxEvent): Promise<void> {
         amount: string;
       };
       await notifyMissedContribution(userId, circleName, amount);
+      break;
+    }
+
+    // ── Certificate events ──────────────────────────────────────────────────
+    case "certificate.mint": {
+      const { circleId, memberStellarKey, circleName, cyclesCompleted, totalSavedUsdc } =
+        payload as {
+          circleId: string;
+          memberStellarKey: string;
+          circleName: string;
+          cyclesCompleted: number;
+          totalSavedUsdc: string;
+        };
+
+      if (!circleId || !memberStellarKey || !circleName) {
+        throw new Error(
+          `certificate.mint payload missing required fields (circleId=${circleId}, memberStellarKey=${memberStellarKey})`
+        );
+      }
+
+      const result = await mintCertificate({
+        memberStellarKey,
+        circleId,
+        circleName,
+        cyclesCompleted: Number(cyclesCompleted),
+        totalSavedUsdc: String(totalSavedUsdc),
+      });
+
+      // Throw so the event is retried on the next poll instead of being lost.
+      if (!result.ok) {
+        throw new Error(`certificate mint failed for circle ${circleId}: ${result.error}`);
+      }
       break;
     }
 
