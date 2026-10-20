@@ -209,3 +209,154 @@ test.describe("Accessibility — ARIA landmarks", () => {
     expect(await nav.count()).toBeGreaterThanOrEqual(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Additional pages required by Issue #218
+// ---------------------------------------------------------------------------
+
+test.describe("Accessibility — Extended page coverage (#218)", () => {
+  test.beforeEach(async ({ page }) => {
+    await mockAuthSession(page);
+    await mockCirclesList(page);
+  });
+
+  test("circle detail page has no critical/serious violations", async ({ page }) => {
+    await page.route("/api/v1/circles/circle-1*", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          success: true,
+          data: {
+            id: "circle-1",
+            name: "Alpha Savings",
+            contributionUsdc: "50",
+            maxMembers: 5,
+            currentMembers: 3,
+            cycleFrequency: "monthly",
+            status: "open",
+            members: [],
+          },
+        }),
+      })
+    );
+
+    await page.goto("/circles/circle-1");
+    await page.waitForLoadState("networkidle");
+
+    const { violations } = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+      .analyze();
+
+    assertNoViolations(violations.filter((v) => v.impact === "critical" || v.impact === "serious"));
+  });
+
+  test("create circle page has no critical/serious violations", async ({ page }) => {
+    await page.goto("/circles/create");
+    await page.waitForLoadState("networkidle");
+
+    const { violations } = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+      .analyze();
+
+    assertNoViolations(violations.filter((v) => v.impact === "critical" || v.impact === "serious"));
+  });
+
+  test("profile page has no critical/serious violations", async ({ page }) => {
+    await page.route("/api/v1/profile*", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          success: true,
+          data: { id: "user-a11y", name: "Test User", phone: "+2348011111111" },
+        }),
+      })
+    );
+
+    await page.goto("/profile");
+    await page.waitForLoadState("networkidle");
+
+    const { violations } = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+      .analyze();
+
+    assertNoViolations(violations.filter((v) => v.impact === "critical" || v.impact === "serious"));
+  });
+
+  test("settings page has no critical/serious violations", async ({ page }) => {
+    await page.goto("/settings");
+    await page.waitForLoadState("networkidle");
+
+    const { violations } = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+      .analyze();
+
+    assertNoViolations(violations.filter((v) => v.impact === "critical" || v.impact === "serious"));
+  });
+
+  test("FAQ page has no critical/serious violations", async ({ page }) => {
+    await page.goto("/faq");
+    await page.waitForLoadState("networkidle");
+
+    const { violations } = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+      .analyze();
+
+    assertNoViolations(violations.filter((v) => v.impact === "critical" || v.impact === "serious"));
+  });
+
+  test("help page has no critical/serious violations", async ({ page }) => {
+    await page.goto("/help");
+    await page.waitForLoadState("networkidle");
+
+    const { violations } = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+      .analyze();
+
+    assertNoViolations(violations.filter((v) => v.impact === "critical" || v.impact === "serious"));
+  });
+});
+
+test.describe("Accessibility — Focus ring visibility (#218)", () => {
+  test("skip-to-main link is visible on focus", async ({ page }) => {
+    await page.goto("/");
+    await page.keyboard.press("Tab");
+
+    const skipLink = page.locator('a[href="#main-content"]');
+    const isVisible = await skipLink.evaluate((el) => {
+      const style = window.getComputedStyle(el);
+      // The link moves to top:0 on focus; check it is not off-screen
+      return style.getPropertyValue("top") !== "-100px";
+    });
+    // First tab should focus skip link, making it on-screen
+    expect(isVisible).toBe(true);
+  });
+
+  test("all interactive elements on landing page have visible focus indicators", async ({ page }) => {
+    await page.goto("/");
+    await page.waitForLoadState("networkidle");
+
+    const { violations } = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa"])
+      .withRules(["focus-visible"])
+      .analyze();
+
+    // No critical/serious focus-related violations
+    assertNoViolations(violations.filter((v) => v.impact === "critical" || v.impact === "serious"));
+  });
+});
+
+test.describe("Accessibility — Images (#218)", () => {
+  test("landing page images all have meaningful alt text", async ({ page }) => {
+    await page.goto("/");
+    await page.waitForLoadState("networkidle");
+
+    const { violations } = await new AxeBuilder({ page })
+      .withTags(["wcag2a"])
+      .withRules(["image-alt"])
+      .analyze();
+
+    assertNoViolations(violations);
+  });
+});

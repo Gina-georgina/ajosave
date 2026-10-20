@@ -56,15 +56,35 @@ jobs:
         run: npx wait-on http://localhost:3000 --timeout 60000
 
       - name: Run axe accessibility scans
-        run: npx playwright test e2e/accessibility/ --reporter=github
+        run: npx playwright test e2e/accessibility/ --reporter=github,json
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: axe-results.json
         continue-on-error: false
+
+      - name: Count axe violations (regression baseline)
+        if: always()
+        run: |
+          # Extract total test counts from the JSON report for tracking purposes.
+          # A non-zero exit from the playwright step above is the authoritative gate;
+          # this step surfaces the numbers in the workflow summary for trending.
+          if [ -f axe-results.json ]; then
+            PASSED=$(jq '.suites | .. | objects | .specs? // [] | .[] | select(.ok == true) | .title' axe-results.json 2>/dev/null | wc -l || echo "0")
+            FAILED=$(jq '.suites | .. | objects | .specs? // [] | .[] | select(.ok == false) | .title' axe-results.json 2>/dev/null | wc -l || echo "0")
+            echo "### Axe Accessibility Scan Results" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Status | Count |" >> "$GITHUB_STEP_SUMMARY"
+            echo "|--------|-------|" >> "$GITHUB_STEP_SUMMARY"
+            echo "| ✅ Passed | $PASSED |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| ❌ Failed | $FAILED |" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload axe results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: axe-results
-          path: playwright-report/
+          path: |
+            playwright-report/
+            axe-results.json
           retention-days: 7
 
   lighthouse-a11y:
