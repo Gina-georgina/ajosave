@@ -58,13 +58,17 @@ jobs:
       - name: Run axe accessibility scans
         run: npx playwright test e2e/accessibility/ --reporter=github
         continue-on-error: false
+        env:
+          A11Y_REPORT_DIR: test-results
 
       - name: Upload axe results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: axe-results
-          path: playwright-report/
+          path: |
+            playwright-report/
+            test-results/a11y-report.json
           retention-days: 7
 
   lighthouse-a11y:
