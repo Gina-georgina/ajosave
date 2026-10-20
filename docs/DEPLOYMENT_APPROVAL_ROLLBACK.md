@@ -23,6 +23,29 @@ Once configured, any run of `production-deploy.yml` or
 `production-rollback.yml` will pause in "Waiting" state until a required
 reviewer approves it from the Actions run page.
 
+## Database migration rollback
+
+Deploys now run `npm run migrate` automatically: staging on every push to
+`main` (before the Vercel preview deploy), production inside
+`production-deploy.yml` after the approval gate and **before** the Vercel
+traffic shift. The runner records each applied migration in the
+`pgmigrations` table, so re-running it is idempotent — only pending
+migrations execute. Migration output is uploaded as a workflow artifact
+(`staging-migration-logs` / `production-migration-logs`), and a failed
+migration aborts the deployment and files a GitHub issue linking to the
+run logs.
+
+If a bad migration ships:
+
+1. **Roll back the last migration** from any machine that can reach the
+   database: `DATABASE_URL=... npm run migrate down` (rolls back exactly
+   one migration). Fix forward with a new migration when possible.
+2. **Or roll back the app first** with the **Rollback Production**
+   workflow, then roll back / fix the migration, then redeploy. Keep
+   migrations compatible with the previous release (expand/contract
+   pattern: add before migrate, drop only after the old version is gone)
+   so the old app keeps running against the newer schema.
+
 ## Rollback path
 
 `production-rollback.yml` (workflow_dispatch):

@@ -1,33 +1,20 @@
-import { Kysely } from "kysely";
+import { MigrationBuilder } from "node-pg-migrate";
 
-export async function up(db: Kysely<any>): Promise<void> {
+export async function up(pgm: MigrationBuilder): Promise<void> {
   // Add payout_method and randomization_seed columns to circles table
-  await db.schema
-    .alterTable("circles")
-    .addColumn("payout_method", "varchar(20)", (col) =>
-      col.notNull().defaultTo("fixed")
-    )
-    .addColumn("randomization_seed", "varchar(255)")
-    .execute();
+  pgm.addColumn("circles", {
+    payout_method: { type: "varchar(20)", notNull: true, default: "'fixed'" },
+    randomization_seed: { type: "varchar(255)" },
+  });
 
   // Add updated_at column to members table
-  await db.schema
-    .alterTable("members")
-    .addColumn("updated_at", "timestamp", (col) =>
-      col.notNull().defaultTo(db.fn("now"))
-    )
-    .execute();
+  pgm.addColumn("members", {
+    updated_at: { type: "timestamp", notNull: true, default: pgm.func("NOW()") },
+  });
 }
 
-export async function down(db: Kysely<any>): Promise<void> {
-  await db.schema
-    .alterTable("circles")
-    .dropColumn("payout_method")
-    .dropColumn("randomization_seed")
-    .execute();
-
-  await db.schema
-    .alterTable("members")
-    .dropColumn("updated_at")
-    .execute();
+export async function down(pgm: MigrationBuilder): Promise<void> {
+  pgm.dropColumn("members", "updated_at");
+  pgm.dropColumn("circles", "payout_method");
+  pgm.dropColumn("circles", "randomization_seed");
 }
