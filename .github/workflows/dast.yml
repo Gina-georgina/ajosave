@@ -98,11 +98,21 @@ jobs:
 
       # ── Comment on failure ────────────────────────────────────────────────
       - name: Create issue on high/critical findings
-        if: failure()
+        if: failure() && hashFiles('report_json.json') != ''
         uses: actions/github-script@v7
         with:
           script: |
             const { owner, repo } = context.repo;
+            const fs = require('fs');
+            const report = JSON.parse(fs.readFileSync('report_json.json', 'utf8'));
+            const alerts = (report.site ?? []).flatMap(site => site.alerts ?? []);
+            const findings = alerts.filter(alert => ['3', '4'].includes(String(alert.riskcode)));
+
+            if (findings.length === 0) {
+              core.info('No HIGH or CRITICAL ZAP findings were reported.');
+              return;
+            }
+
             const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
             await github.rest.issues.create({
               owner,
