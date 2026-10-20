@@ -136,9 +136,19 @@ export const POST = withRateLimit(
       const body = await req.json();
       const parsed = createCircleSchema.safeParse(body);
       if (!parsed.success) {
-        return NextResponse.json<ApiResponse<never>>(
-          { success: false, error: parsed.error.errors[0].message },
-          { status: 400 }
+        // Return 422 with field-level errors for bound violations (Issue #226)
+        const fieldErrors = parsed.error.errors.map((e) => ({
+          field: e.path.join("."),
+          message: e.message,
+        }));
+        return NextResponse.json<ApiResponse<never> & { fields?: typeof fieldErrors }>(
+          {
+            success: false,
+            error: parsed.error.errors[0].message,
+            // @ts-expect-error extended error envelope
+            fields: fieldErrors,
+          },
+          { status: 422 }
         );
       }
 
