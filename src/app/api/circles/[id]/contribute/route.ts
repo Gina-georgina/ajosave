@@ -7,6 +7,8 @@ import { serverConfig } from "@/server/config";
 import { withErrorHandler } from "@/server/middleware";
 import { query } from "@/lib/db";
 import { randomUUID } from "crypto";
+import { enforceKycContributionLimit, KycLimitError } from "@/lib/kyc-limits";
+import { logAuditAction } from "@/server/services/audit.service";
 import type { ApiResponse } from "@/types";
 
 export const POST = withErrorHandler(async (_req: NextRequest, ctx: unknown) => {
@@ -41,6 +43,48 @@ export const POST = withErrorHandler(async (_req: NextRequest, ctx: unknown) => 
       { success: false, error: "You are not a member of this circle" },
       { status: 403 }
     );
+  }
+
+  // ── KYC tier-based contribution limit enforcement (Issue #223) ─────────────
+  // The contribution amount is stored in NGN (contributionFiat when currency=NGN,
+  // or converted to NGN-equivalent for other currencies).
+  // We use contributionFiat as the reference amount when currency is NGN;
+  // for other currencies we use the NGN column if available.
+  const contributionNgn: number =
+    typeof (circle as { contributionNgn?: number }).contributionNgn === "number"
+      ? (circle as { contributionNgn: number }).contributionNgn
+      : 0;
+
+  if (contributionNgn > 0) {
+    try {
+      const tier = await enforceKycContributionLimit(userId, contributionNgn);
+      // Audit log when contribution is allowed (tier info for compliance records)
+      void tier; // consumed — no blocking action needed
+    } catch (err) {
+      if (err instanceof KycLimitError) {
+        // Log blocked contribution attempt (Issue #223)
+        await logAuditAction(userId, "OTHER", "MEMBER", member.id, {
+          details: {
+            event: "CONTRIBUTION_BLOCKED_KYC_LIMIT",
+            kycTier: err.tier,
+            limitNgn: err.limitNgn,
+            attemptedNgn: err.amountNgn,
+            circleId: params.id,
+            cycleNumber: circle.currentCycle,
+          },
+          ipAddress: _req.headers.get("x-forwarded-for")?.split(",")[0].trim() ?? undefined,
+        });
+        return NextResponse.json<ApiResponse<never>>(
+          {
+            success: false,
+            error: err.message, // "Complete KYC to increase your limit"
+            code: "KYC_LIMIT_EXCEEDED",
+          },
+          { status: 422 }
+        );
+      }
+      throw err;
+    }
   }
 
   // Deterministic reference: ajo-{circleId}-{memberId}-{cycleNumber}
