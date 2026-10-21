@@ -1,0 +1,4 @@
+{
+  "$comment": "Known moderate axe violations accepted per page (issue #289). The full-coverage scan fails on any moderate violation NOT listed here; Critical/Serious always fail. When you consciously accept a moderate finding, add { \"page\": \"/path\", \"rule\": \"axe-rule-id\" } and mention it in the PR. Entries can be removed once the underlying issue is fixed.",
+  "moderate": []
+}
