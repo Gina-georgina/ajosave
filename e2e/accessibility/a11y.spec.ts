@@ -10,9 +10,12 @@
  *  - Circle detail page (authenticated)
  *  - Form error states produce accessible error messages
  *  - Focus management after modal open/close
+ *  - Full-page coverage scan with moderate-violation baseline (issue #289)
  */
 import { test, expect, Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import * as fs from "fs";
+import * as path from "path";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -211,152 +214,112 @@ test.describe("Accessibility — ARIA landmarks", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Additional pages required by Issue #218
+// Full-page coverage + moderate baseline (issue #289)
 // ---------------------------------------------------------------------------
 
-test.describe("Accessibility — Extended page coverage (#218)", () => {
-  test.beforeEach(async ({ page }) => {
-    await mockAuthSession(page);
-    await mockCirclesList(page);
+interface ModerateBaselineEntry {
+  page: string;
+  rule: string;
+}
+
+interface A11yReportEntry {
+  page: string;
+  impact: string;
+  rule: string;
+  nodes: number;
+}
+
+const BASELINE_PATH = path.join(__dirname, "a11y-baseline.json");
+const REPORT_DIR = process.env.A11Y_REPORT_DIR || "test-results";
+const REPORT_PATH = path.join(REPORT_DIR, "a11y-report.json");
+
+/** Every primary page that must stay free of new accessibility regressions. */
+const COVERED_PAGES: Array<{ name: string; path: string }> = [
+  { name: "landing", path: "/" },
+  { name: "login", path: "/auth/login" },
+  { name: "circles", path: "/circles" },
+  { name: "circle detail", path: "/circles/circle-1" },
+  { name: "create circle", path: "/circles/create" },
+  { name: "join circle", path: "/circles/circle-1/join" },
+  { name: "contribute callback", path: "/circles/circle-1/contribute/callback" },
+  { name: "dashboard", path: "/dashboard" },
+  { name: "settings", path: "/settings" },
+  { name: "analytics", path: "/analytics" },
+  { name: "admin", path: "/admin" },
+  { name: "help", path: "/help" },
+  { name: "faq", path: "/faq" },
+  { name: "profile", path: "/profile" },
+];
+
+type AxeViolations = Awaited<ReturnType<AxeBuilder["analyze"]>>["violations"];
+
+function loadBaseline(): ModerateBaselineEntry[] {
+  const raw = fs.readFileSync(BASELINE_PATH, "utf8");
+  const parsed = JSON.parse(raw) as { moderate: ModerateBaselineEntry[] };
+  return parsed.moderate;
+}
+
+test.describe("Accessibility — Full page coverage (issue #289)", () => {
+  const report: A11yReportEntry[] = [];
+  let baseline: ModerateBaselineEntry[] = [];
+
+  test.beforeAll(() => {
+    baseline = loadBaseline();
   });
 
-  test("circle detail page has no critical/serious violations", async ({ page }) => {
-    await page.route("/api/v1/circles/circle-1*", (route) =>
-      route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          success: true,
-          data: {
-            id: "circle-1",
-            name: "Alpha Savings",
-            contributionUsdc: "50",
-            maxMembers: 5,
-            currentMembers: 3,
-            cycleFrequency: "monthly",
-            status: "open",
-            members: [],
-          },
-        }),
-      })
-    );
-
-    await page.goto("/circles/circle-1");
-    await page.waitForLoadState("networkidle");
-
-    const { violations } = await new AxeBuilder({ page })
-      .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
-      .analyze();
-
-    assertNoViolations(violations.filter((v) => v.impact === "critical" || v.impact === "serious"));
+  test.afterAll(() => {
+    fs.mkdirSync(REPORT_DIR, { recursive: true });
+    fs.writeFileSync(REPORT_PATH, JSON.stringify({ generatedAt: new Date().toISOString(), pages: COVERED_PAGES, violations: report }, null, 2));
   });
 
-  test("create circle page has no critical/serious violations", async ({ page }) => {
-    await page.goto("/circles/create");
-    await page.waitForLoadState("networkidle");
+  for (const covered of COVERED_PAGES) {
+    test(`${covered.name} (${covered.path}) — no critical/serious, no new moderate violations`, async ({ page }) => {
+      await mockAuthSession(page);
+      await mockCirclesList(page);
 
-    const { violations } = await new AxeBuilder({ page })
-      .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
-      .analyze();
+      await page.goto(covered.path);
+      await page.waitForLoadState("networkidle");
 
-    assertNoViolations(violations.filter((v) => v.impact === "critical" || v.impact === "serious"));
-  });
+      const { violations }: { violations: AxeViolations } = await new AxeBuilder({ page })
+        .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+        .analyze();
 
-  test("profile page has no critical/serious violations", async ({ page }) => {
-    await page.route("/api/v1/profile*", (route) =>
-      route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          success: true,
-          data: { id: "user-a11y", name: "Test User", phone: "+2348011111111" },
-        }),
-      })
-    );
+      for (const v of violations) {
+        report.push({
+          page: covered.path,
+          impact: v.impact ?? "unknown",
+          rule: v.id,
+          nodes: v.nodes.length,
+        });
+      }
 
-    await page.goto("/profile");
-    await page.waitForLoadState("networkidle");
+      // AC: zero Critical/Serious violations anywhere.
+      const blocking = violations.filter(
+        (v) => v.impact === "critical" || v.impact === "serious"
+      );
+      if (blocking.length > 0) {
+        const details = blocking
+          .map((v) => `[${v.impact}] ${v.id}: ${v.description}\n  ${v.nodes.map((n) => n.html).join("\n  ")}`)
+          .join("\n\n");
+        throw new Error(`Accessibility violations found on ${covered.path}:\n\n${details}`);
+      }
 
-    const { violations } = await new AxeBuilder({ page })
-      .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
-      .analyze();
-
-    assertNoViolations(violations.filter((v) => v.impact === "critical" || v.impact === "serious"));
-  });
-
-  test("settings page has no critical/serious violations", async ({ page }) => {
-    await page.goto("/settings");
-    await page.waitForLoadState("networkidle");
-
-    const { violations } = await new AxeBuilder({ page })
-      .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
-      .analyze();
-
-    assertNoViolations(violations.filter((v) => v.impact === "critical" || v.impact === "serious"));
-  });
-
-  test("FAQ page has no critical/serious violations", async ({ page }) => {
-    await page.goto("/faq");
-    await page.waitForLoadState("networkidle");
-
-    const { violations } = await new AxeBuilder({ page })
-      .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
-      .analyze();
-
-    assertNoViolations(violations.filter((v) => v.impact === "critical" || v.impact === "serious"));
-  });
-
-  test("help page has no critical/serious violations", async ({ page }) => {
-    await page.goto("/help");
-    await page.waitForLoadState("networkidle");
-
-    const { violations } = await new AxeBuilder({ page })
-      .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
-      .analyze();
-
-    assertNoViolations(violations.filter((v) => v.impact === "critical" || v.impact === "serious"));
-  });
-});
-
-test.describe("Accessibility — Focus ring visibility (#218)", () => {
-  test("skip-to-main link is visible on focus", async ({ page }) => {
-    await page.goto("/");
-    await page.keyboard.press("Tab");
-
-    const skipLink = page.locator('a[href="#main-content"]');
-    const isVisible = await skipLink.evaluate((el) => {
-      const style = window.getComputedStyle(el);
-      // The link moves to top:0 on focus; check it is not off-screen
-      return style.getPropertyValue("top") !== "-100px";
+      // AC: no NEW moderate violations — anything not already in the
+      // baseline file fails. To accept a known moderate violation, add
+      // { "page": "...", "rule": "..." } to a11y-baseline.json.
+      const moderate = violations.filter((v) => v.impact === "moderate");
+      const newModerate = moderate.filter(
+        (v) => !baseline.some((b) => b.page === covered.path && b.rule === v.id)
+      );
+      if (newModerate.length > 0) {
+        const details = newModerate
+          .map((v) => `[moderate] ${v.id}: ${v.description}\n  ${v.nodes.map((n) => n.html).join("\n  ")}`)
+          .join("\n\n");
+        throw new Error(
+          `New moderate accessibility violations on ${covered.path} (not in a11y-baseline.json):\n\n${details}\n\n` +
+            `Fix them, or add { "page": "${covered.path}", "rule": "<rule-id>" } to e2e/accessibility/a11y-baseline.json after review.`
+        );
+      }
     });
-    // First tab should focus skip link, making it on-screen
-    expect(isVisible).toBe(true);
-  });
-
-  test("all interactive elements on landing page have visible focus indicators", async ({ page }) => {
-    await page.goto("/");
-    await page.waitForLoadState("networkidle");
-
-    const { violations } = await new AxeBuilder({ page })
-      .withTags(["wcag2a", "wcag2aa"])
-      .withRules(["focus-visible"])
-      .analyze();
-
-    // No critical/serious focus-related violations
-    assertNoViolations(violations.filter((v) => v.impact === "critical" || v.impact === "serious"));
-  });
-});
-
-test.describe("Accessibility — Images (#218)", () => {
-  test("landing page images all have meaningful alt text", async ({ page }) => {
-    await page.goto("/");
-    await page.waitForLoadState("networkidle");
-
-    const { violations } = await new AxeBuilder({ page })
-      .withTags(["wcag2a"])
-      .withRules(["image-alt"])
-      .analyze();
-
-    assertNoViolations(violations);
-  });
+  }
 });

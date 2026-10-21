@@ -60,6 +60,8 @@ jobs:
         env:
           PLAYWRIGHT_JSON_OUTPUT_NAME: axe-results.json
         continue-on-error: false
+        env:
+          A11Y_REPORT_DIR: test-results
 
       - name: Count axe violations (regression baseline)
         if: always()
@@ -84,7 +86,7 @@ jobs:
           name: axe-results
           path: |
             playwright-report/
-            axe-results.json
+            test-results/a11y-report.json
           retention-days: 7
 
   lighthouse-a11y:

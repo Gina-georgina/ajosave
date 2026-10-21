@@ -38,3 +38,10 @@
   border-radius: var(--radius-sm);
   color: var(--color-text-secondary);
 }
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-3);
+}

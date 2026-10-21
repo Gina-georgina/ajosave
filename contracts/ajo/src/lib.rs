@@ -12,7 +12,7 @@
 //! ## Storage Optimization
 //! - Instance storage: Core circle configuration (survives entire contract lifetime)
 //! - Temporary storage: Contribution tracking (cleared when circle completes)
-//! - Persistent storage: Member reputation records (cross-contract lifetime)
+//! - Persistent storage: Packed per-member records (reputation, counts, suspension)
 
 #![no_std]
 
@@ -23,7 +23,7 @@ use soroban_sdk::{
 // ─── Schema version ───────────────────────────────────────────────────────────
 /// Bump this constant whenever the storage layout changes in a new deployment.
 /// `migrate()` uses it to gate and sequence migration logic.
-const STORAGE_VERSION: u32 = 1;
+const STORAGE_VERSION: u32 = 2;
 
 // ─── TTL Configuration ────────────────────────────────────────────────────────
 const DAY_IN_LEDGERS: u32 = 17280;
@@ -96,8 +96,43 @@ pub enum DataKey {
 
     // ─── Missed contribution policy (issue #50) ──────────────────────────────────
     MaxMissedContributions,          // instance: allowed misses before suspension
-    MissedContributions(Address),    // persistent: lifetime missed count per member
-    Suspended(Address),              // instance: member suspended from this circle
+    MissedContributions(Address),    // persistent (legacy v1): lifetime missed count
+    Suspended(Address),              // instance (legacy v1): member suspended flag
+
+    // ─── Packed per-member state (storage v2, issue #254) ────────────────────────
+    MemberStats(Address),            // persistent: all per-member counters in one entry
+}
+
+/// Packed per-member persistent state (storage v2, issue #254).
+///
+/// Replaces five separate per-member ledger entries (`MemberReputation`,
+/// `TotalCirclesCompleted`, `OnTimeContributions`, `TotalContributions`,
+/// `MissedContributions`) and the per-member instance `Suspended` flag with
+/// a single persistent entry per member: 5 ledger entries → 1, and the
+/// instance entry no longer grows with suspension flags. Same values, same
+/// public API as storage v1.
+#[contracttype]
+#[derive(Clone)]
+pub struct MemberStats {
+    pub reputation: u32,
+    pub circles_completed: u32,
+    pub on_time_contributions: u32,
+    pub total_contributions: u32,
+    pub missed_contributions: u32,
+    pub suspended: bool,
+}
+
+impl MemberStats {
+    fn zeroed() -> Self {
+        MemberStats {
+            reputation: 0,
+            circles_completed: 0,
+            on_time_contributions: 0,
+            total_contributions: 0,
+            missed_contributions: 0,
+            suspended: false,
+        }
+    }
 }
 
 // ─── Contract ─────────────────────────────────────────────────────────────────
@@ -279,25 +314,14 @@ impl AjoContract {
         let next_payout_time: u64 = env.storage().instance().get(&DataKey::NextPayoutTime).expect("not initialized");
         let is_on_time = env.ledger().timestamp() < next_payout_time;
 
+        // Packed per-member record (storage v2, issue #254): one read/write
+        // instead of separate OnTime/Total entries.
+        let mut stats = Self::member_stats(&env, &member);
         if is_on_time {
-            let on_time_count: u32 = env
-                .storage()
-                .persistent()
-                .get(&DataKey::OnTimeContributions(member.clone()))
-                .unwrap_or(0);
-            env.storage()
-                .persistent()
-                .set(&DataKey::OnTimeContributions(member.clone()), &(on_time_count + 1));
+            stats.on_time_contributions += 1;
         }
-
-        let total: u32 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::TotalContributions(member.clone()))
-            .unwrap_or(0);
-        env.storage()
-            .persistent()
-            .set(&DataKey::TotalContributions(member.clone()), &(total + 1));
+        stats.total_contributions += 1;
+        Self::store_member_stats(&env, &member, &stats);
 
         Self::update_reputation(&env, &member);
 
@@ -427,14 +451,9 @@ impl AjoContract {
             // Clear temporary contribution entries to reduce ledger footprint
             Self::clear_temp_contributions(&env, &members, max_members);
             for member in members.iter() {
-                let circles_completed: u32 = env
-                    .storage()
-                    .persistent()
-                    .get(&DataKey::TotalCirclesCompleted(member.clone()))
-                    .unwrap_or(0);
-                env.storage()
-                    .persistent()
-                    .set(&DataKey::TotalCirclesCompleted(member.clone()), &(circles_completed + 1));
+                let mut stats = Self::member_stats(&env, &member);
+                stats.circles_completed += 1;
+                Self::store_member_stats(&env, &member, &stats);
                 Self::update_reputation(&env, &member);
             }
         } else {
@@ -463,21 +482,14 @@ impl AjoContract {
     /// - On-time contribution rate (70% weight)
     /// - Number of completed circles (30% weight)
     fn update_reputation(env: &Env, member: &Address) {
-        let on_time: u32 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::OnTimeContributions(member.clone()))
-            .unwrap_or(0);
-        let total: u32 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::TotalContributions(member.clone()))
-            .unwrap_or(1); // avoid division by zero
-        let circles_completed: u32 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::TotalCirclesCompleted(member.clone()))
-            .unwrap_or(0);
+        let stats = Self::member_stats(env, member);
+        let on_time: u32 = stats.on_time_contributions;
+        let total: u32 = if stats.total_contributions > 0 {
+            stats.total_contributions
+        } else {
+            1 // avoid division by zero
+        };
+        let circles_completed: u32 = stats.circles_completed;
 
         // On-time rate: 0-70 points
         let on_time_score = if total > 0 {
@@ -494,22 +506,11 @@ impl AjoContract {
         };
 
         let reputation = on_time_score + circles_score;
-        
-        // Update storage and extend TTL for all persistent keys related to this member
-        let keys = [
-            DataKey::OnTimeContributions(member.clone()),
-            DataKey::TotalContributions(member.clone()),
-            DataKey::TotalCirclesCompleted(member.clone()),
-            DataKey::MemberReputation(member.clone()),
-        ];
 
-        for key in keys.iter() {
-            Self::extend_persistent_ttl(env, key);
-        }
-
-        env.storage()
-            .persistent()
-            .set(&DataKey::MemberReputation(member.clone()), &reputation);
+        // Update the packed per-member entry and extend its TTL.
+        let mut updated = stats;
+        updated.reputation = reputation;
+        Self::store_member_stats(env, member, &updated);
 
         env.events().publish(
             (Symbol::new(&env, "reputation_updated"),),
@@ -519,36 +520,18 @@ impl AjoContract {
 
     /// Read-only: get reputation score for a member (0-100)
     pub fn get_reputation(env: Env, member: Address) -> u32 {
-        env.storage()
-            .persistent()
-            .get(&DataKey::MemberReputation(member))
-            .unwrap_or(0)
+        Self::member_stats(&env, &member).reputation
     }
 
     /// Read-only: get detailed reputation stats for a member
     pub fn get_reputation_stats(env: Env, member: Address) -> (u32, u32, u32, u32) {
-        let reputation: u32 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::MemberReputation(member.clone()))
-            .unwrap_or(0);
-        let circles_completed: u32 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::TotalCirclesCompleted(member.clone()))
-            .unwrap_or(0);
-        let on_time: u32 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::OnTimeContributions(member.clone()))
-            .unwrap_or(0);
-        let total: u32 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::TotalContributions(member))
-            .unwrap_or(0);
-
-        (reputation, circles_completed, on_time, total)
+        let stats = Self::member_stats(&env, &member);
+        (
+            stats.reputation,
+            stats.circles_completed,
+            stats.on_time_contributions,
+            stats.total_contributions,
+        )
     }
 
     /// Migrate storage layout after a contract upgrade. Admin-only.
@@ -580,8 +563,86 @@ impl AjoContract {
             }
         }
 
+        // ── v1 → v2 (issue #254) ──────────────────────────────────────────────
+        // Pack the five per-member persistent entries and the instance
+        // `Suspended` flag into one `MemberStats` entry per member. Idempotent:
+        // members that already have a packed entry are skipped.
+        if from < 2 {
+            let members: Vec<Address> = env
+                .storage()
+                .instance()
+                .get(&DataKey::Members)
+                .unwrap_or(Vec::new(&env));
+            for member in members.iter() {
+                if env.storage().persistent().has(&DataKey::MemberStats(member.clone())) {
+                    continue;
+                }
+
+                let reputation: Option<u32> = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::MemberReputation(member.clone()));
+                let circles_completed: Option<u32> = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::TotalCirclesCompleted(member.clone()));
+                let on_time_contributions: Option<u32> = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::OnTimeContributions(member.clone()));
+                let total_contributions: Option<u32> = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::TotalContributions(member.clone()));
+                let missed_contributions: Option<u32> = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::MissedContributions(member.clone()));
+                let suspended: bool = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::Suspended(member.clone()))
+                    .unwrap_or(false);
+
+                let has_legacy = reputation.is_some()
+                    || circles_completed.is_some()
+                    || on_time_contributions.is_some()
+                    || total_contributions.is_some()
+                    || missed_contributions.is_some()
+                    || suspended;
+
+                if has_legacy {
+                    let stats = MemberStats {
+                        reputation: reputation.unwrap_or(0),
+                        circles_completed: circles_completed.unwrap_or(0),
+                        on_time_contributions: on_time_contributions.unwrap_or(0),
+                        total_contributions: total_contributions.unwrap_or(0),
+                        missed_contributions: missed_contributions.unwrap_or(0),
+                        suspended,
+                    };
+                    Self::store_member_stats(&env, &member, &stats);
+                }
+
+                let legacy: [DataKey; 5] = [
+                    DataKey::MemberReputation(member.clone()),
+                    DataKey::TotalCirclesCompleted(member.clone()),
+                    DataKey::OnTimeContributions(member.clone()),
+                    DataKey::TotalContributions(member.clone()),
+                    DataKey::MissedContributions(member.clone()),
+                ];
+                for key in legacy.iter() {
+                    if env.storage().persistent().has(key) {
+                        env.storage().persistent().remove(key);
+                    }
+                }
+                if env.storage().instance().has(&DataKey::Suspended(member.clone())) {
+                    env.storage().instance().remove(&DataKey::Suspended(member.clone()));
+                }
+            }
+        }
+
         // ── Add future migration blocks here ─────────────────────────────────
-        // if from < 2 { … }
+        // if from < 3 { … }
 
         env.storage().instance().set(&DataKey::StorageVersion, &STORAGE_VERSION);
 
@@ -788,12 +849,12 @@ impl AjoContract {
 
     /// Lifetime missed contributions for a member.
     pub fn get_missed_contributions(env: Env, member: Address) -> u32 {
-        env.storage().persistent().get(&DataKey::MissedContributions(member)).unwrap_or(0)
+        Self::member_stats(&env, &member).missed_contributions
     }
 
     /// Whether a member is suspended from contributing in this circle.
     pub fn is_suspended(env: Env, member: Address) -> bool {
-        env.storage().instance().get(&DataKey::Suspended(member)).unwrap_or(false)
+        Self::member_stats(&env, &member).suspended
     }
 
     /// Lift a suspension. Admin-only.
@@ -806,20 +867,23 @@ impl AjoContract {
         if !members.contains(&member) {
             panic!("not a member");
         }
-        env.storage().instance().remove(&DataKey::Suspended(member.clone()));
+        let mut stats = Self::member_stats(&env, &member);
+        if stats.suspended {
+            stats.suspended = false;
+            Self::store_member_stats(&env, &member, &stats);
+        }
         env.events().publish((Symbol::new(&env, "member_reinstated"),), (member,));
     }
 
     fn record_missed_contribution(env: &Env, member: &Address, cycle: u32) {
-        let key = DataKey::MissedContributions(member.clone());
-        let missed: u32 = env.storage().persistent().get(&key).unwrap_or(0).saturating_add(1);
-        env.storage().persistent().set(&key, &missed);
-        Self::extend_persistent_ttl(env, &key);
-
+        let mut stats = Self::member_stats(env, member);
+        let already_suspended = stats.suspended;
+        stats.missed_contributions = stats.missed_contributions.saturating_add(1);
         // Missing a cycle counts against on-time reputation.
-        let total_key = DataKey::TotalContributions(member.clone());
-        let total: u32 = env.storage().persistent().get(&total_key).unwrap_or(0);
-        env.storage().persistent().set(&total_key, &total.saturating_add(1));
+        stats.total_contributions = stats.total_contributions.saturating_add(1);
+        let missed = stats.missed_contributions;
+        Self::store_member_stats(env, member, &stats);
+
         Self::update_reputation(env, member);
 
         env.events().publish(
@@ -832,9 +896,10 @@ impl AjoContract {
             .instance()
             .get(&DataKey::MaxMissedContributions)
             .unwrap_or(DEFAULT_MAX_MISSED);
-        let already: bool = env.storage().instance().get(&DataKey::Suspended(member.clone())).unwrap_or(false);
-        if missed >= max_missed && !already {
-            env.storage().instance().set(&DataKey::Suspended(member.clone()), &true);
+        if missed >= max_missed && !already_suspended {
+            let mut updated = Self::member_stats(env, member);
+            updated.suspended = true;
+            Self::store_member_stats(env, member, &updated);
             env.events().publish((Symbol::new(env, "member_suspended"),), (member.clone(), missed));
         }
     }
@@ -900,6 +965,23 @@ impl AjoContract {
         env.storage()
             .persistent()
             .extend_ttl(key, PERSISTENT_LIFETIME_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+    }
+
+    /// Read the packed per-member persistent record (storage v2, issue #254),
+    /// defaulting to zeros for members with no record yet — the same values
+    /// the v1 per-key `unwrap_or` defaults produced.
+    fn member_stats(env: &Env, member: &Address) -> MemberStats {
+        env.storage()
+            .persistent()
+            .get(&DataKey::MemberStats(member.clone()))
+            .unwrap_or_else(MemberStats::zeroed)
+    }
+
+    /// Write the packed per-member record and extend its TTL.
+    fn store_member_stats(env: &Env, member: &Address, stats: &MemberStats) {
+        let key = DataKey::MemberStats(member.clone());
+        env.storage().persistent().set(&key, stats);
+        Self::extend_persistent_ttl(env, &key);
     }
 
     /// Test-only helper: force the payout lock to a given value.

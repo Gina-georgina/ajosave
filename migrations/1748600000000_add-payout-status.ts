@@ -1,19 +1,13 @@
-import { Kysely, sql } from "kysely";
+import { MigrationBuilder } from "node-pg-migrate";
 
-export async function up(db: Kysely<any>): Promise<void> {
-  await db.schema
-    .alterTable("payouts")
-    .addColumn("status", "varchar(20)", (col) => col.notNull().defaultTo("completed"))
-    .addColumn("retry_count", "integer", (col) => col.notNull().defaultTo(0))
-    .addColumn("last_error", "text")
-    .execute();
+export async function up(pgm: MigrationBuilder): Promise<void> {
+  pgm.addColumn("payouts", {
+    status: { type: "varchar(20)", notNull: true, default: "'completed'" },
+    retry_count: { type: "integer", notNull: true, default: 0 },
+    last_error: { type: "text" },
+  });
 }
 
-export async function down(db: Kysely<any>): Promise<void> {
-  await db.schema
-    .alterTable("payouts")
-    .dropColumn("status")
-    .dropColumn("retry_count")
-    .dropColumn("last_error")
-    .execute();
+export async function down(pgm: MigrationBuilder): Promise<void> {
+  pgm.dropColumn("payouts", ["status", "retry_count", "last_error"]);
 }

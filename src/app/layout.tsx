@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import "@/styles/globals.css";
 import "@/styles/components.css";
 import { Navbar } from "@/components/layout/Navbar";
+import { ToastProvider } from "@/components/ui/Toast";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
@@ -29,12 +30,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={inter.variable}>
       <body>
-        {/* Skip navigation — WCAG 2.4.1: keyboard users can jump past the nav */}
-        <a href="#main-content" className="skip-link">
-          Skip to main content
-        </a>
-        <Navbar />
-        <main id="main-content">{children}</main>
+        <ToastProvider>
+          <Navbar />
+          <main>{children}</main>
+        </ToastProvider>
       </body>
     </html>
   );

@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { createCircleSchema } from "@/types/schemas";
 import { createCircle, listCircles, getCirclesByUser } from "@/server/services/circle.service";
+import { getTemplateById, trackTemplateUsage } from "@/server/services/circle-template.service";
 import { withErrorHandler, withRateLimit, withSanitizedBody } from "@/server/middleware";
 import {
   parseCursorParams,
@@ -134,7 +135,23 @@ export const POST = withRateLimit(
       }
 
       const body = await req.json();
-      const parsed = createCircleSchema.safeParse(body);
+
+      // Pre-populate defaults from a template when one is supplied. Any field
+      // the client sends explicitly still wins, so users can override defaults.
+      const rawTemplateId = typeof body?.templateId === "string" ? body.templateId : undefined;
+      let payload = body;
+      if (rawTemplateId) {
+        const template = getTemplateById(rawTemplateId);
+        if (!template) {
+          return NextResponse.json<ApiResponse<never>>(
+            { success: false, error: "Unknown circle template" },
+            { status: 400 }
+          );
+        }
+        payload = { ...template.values, ...body };
+      }
+
+      const parsed = createCircleSchema.safeParse(payload);
       if (!parsed.success) {
         return NextResponse.json<ApiResponse<never>>(
           { success: false, error: parsed.error.errors[0].message },
@@ -142,8 +159,12 @@ export const POST = withRateLimit(
         );
       }
 
+      const { templateId: _templateId, ...input } = parsed.data;
       const userId = (session.user as { id: string }).id;
-      const circle = await createCircle(userId, parsed.data);
+      const circle = await createCircle(userId, input);
+      if (rawTemplateId) {
+        trackTemplateUsage(rawTemplateId);
+      }
       return NextResponse.json<ApiResponse<Circle>>(
         { success: true, data: circle },
         { status: 201 }
