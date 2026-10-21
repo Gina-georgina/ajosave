@@ -391,7 +391,25 @@ let (cycle, max, _, completed, _) = client.get_state();
         let f = setup_fixture(2);
         for m in f.members.iter() { f.client.join(m); }
         f.client.pause();
-        f.client.contribute(&f.members.get(0).unwrap(), &f.contribution);
+        assert_eq!(
+            f.client.try_contribute(&f.members.get(0).unwrap(), &f.contribution),
+            Err(Ok(crate::Error::CirclePaused))
+        );
+    }
+
+    /// pause: joining is rejected with the same typed pause error.
+    #[test]
+    fn test_paused_blocks_join() {
+        let f = setup_fixture(2);
+        f.client.pause();
+        assert_eq!(
+            f.client.try_join(&f.members.get(0).unwrap()),
+            Err(Ok(crate::Error::CirclePaused))
+        );
+        assert_eq!(f.client.get_members().len(), 0);
+        f.client.unpause();
+        f.client.join(&f.members.get(0).unwrap());
+        assert_eq!(f.client.get_members().len(), 1);
     }
 
     /// pause: blocks payout while paused, so pooled member funds stay put
@@ -403,7 +421,7 @@ let (cycle, max, _, completed, _) = client.get_state();
         for m in f.members.iter() { f.client.join(m); }
         f.env.ledger().with_mut(|l| l.timestamp = f.interval + 1);
         f.client.pause();
-        f.client.payout();
+        assert_eq!(f.client.try_payout(), Err(Ok(crate::Error::CirclePaused)));
     }
 
     /// unpause: restores normal fund movement — funds are not permanently
@@ -420,6 +438,30 @@ let (cycle, max, _, completed, _) = client.get_state();
         f.client.payout(); // must succeed now that the pause has been lifted
         let (cycle, _, _, _, _) = f.client.get_state();
         assert_eq!(cycle, 2);
+
+        use soroban_sdk::{testutils::Events, TryFromVal};
+        let resumed_sym = soroban_sdk::Symbol::new(&f.env, "CircleResumed");
+        let found = f.env.events().all().iter().any(|(_, topics, _)| {
+            topics.len() == 1
+                && soroban_sdk::Symbol::try_from_val(&f.env, &topics.get(0).unwrap())
+                    .is_ok_and(|symbol| symbol == resumed_sym)
+        });
+        assert!(found, "CircleResumed event should be emitted");
+    }
+
+    /// unpause restores contributions after the next cycle begins.
+    #[test]
+    fn test_unpause_restores_contribute() {
+        let f = setup_fixture(2);
+        for m in f.members.iter() { f.client.join(m); }
+        f.env.ledger().with_mut(|l| l.timestamp = f.interval + 1);
+        f.client.payout();
+
+        let member = f.members.get(0).unwrap();
+        f.client.pause();
+        assert_eq!(f.client.try_contribute(&member, &f.contribution), Err(Ok(crate::Error::CirclePaused)));
+        f.client.unpause();
+        f.client.contribute(&member, &f.contribution);
     }
 
     /// Fund custody: a fully-contributed cycle's payout drains the contract's
