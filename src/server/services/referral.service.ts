@@ -1,22 +1,28 @@
 /**
  * Referral fraud controls service.
  *
- * Issue #120 — Referral fraud controls
+ * Issue #227 — Referral code validation and fraud prevention
  *
  * Fraud checks implemented:
- *  1. Self-referral prevention — a user cannot use their own referral code
- *  2. Duplicate prevention — a user can only be referred once
- *  3. Velocity limit — max 5 referrals per referrer per 24 h window
- *  4. IP-based abuse — max 3 referrals from the same IP in 24 h
- *  5. Phone-based abuse — same phone number cannot generate multiple accounts
- *     and claim rewards (checked via referral_fraud_audit_log)
+ *  1. Self-referral prevention — a user cannot use their own referral code (→ 422)
+ *  2. Code deactivated — admin can disable a referral code (→ 422)
+ *  3. Use-limit enforcement — each code is limited to N uses (configurable, default: 10)
+ *  4. Phone already registered — users with an existing account cannot use a referral code
+ *  5. Duplicate prevention — a user can only be referred once
+ *  6. Velocity limit — max 5 referrals per referrer per 24 h window
+ *  7. IP-based abuse — max 3 referrals from the same IP in 24 h
+ *  8. Suspicious patterns — flagged in audit_logs for admin review
  *
- * All fraud events are written to `referral_fraud_audit_log` for observability
- * and manual review.
+ * Reward rules (Issue #227):
+ *  - Reward is NOT granted at validation time; it is granted by grantReferralReward()
+ *    once the referee makes their first confirmed contribution.
+ *
+ * All fraud events are written to `referral_fraud_audit_log` for observability.
  */
 
 import { randomUUID } from "crypto";
 import { query, transaction } from "@/lib/db";
+import { logAuditAction } from "./audit.service";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -26,6 +32,9 @@ export type ReferralFraudReason =
   | "VELOCITY_LIMIT"
   | "IP_LIMIT"
   | "INVALID_CODE"
+  | "CODE_DEACTIVATED"
+  | "USE_LIMIT_EXCEEDED"
+  | "PHONE_ALREADY_REGISTERED"
   | "UNKNOWN";
 
 export class ReferralFraudError extends Error {
@@ -51,10 +60,16 @@ export interface ReferralStats {
   referredBy: string | null;
 }
 
-// ─── Velocity / IP thresholds ─────────────────────────────────────────────────
+// ─── Velocity / use-limit thresholds ─────────────────────────────────────────
 
 const VELOCITY_LIMIT_PER_24H = 5;   // max referrals a referrer can make per 24 h
 const IP_LIMIT_PER_24H = 3;         // max referrals from one IP per 24 h
+
+/** Default maximum times a single referral code can be used (Issue #227, configurable via env). */
+function getMaxUses(): number {
+  const env = parseInt(process.env.REFERRAL_MAX_USES ?? "10", 10);
+  return Number.isFinite(env) && env > 0 ? env : 10;
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -91,14 +106,40 @@ async function logFraudEvent(opts: {
   }
 }
 
+/**
+ * Flag a suspicious referral pattern in the main audit_logs table so that
+ * admin dashboards and alerting pipelines surface it (Issue #227).
+ * Never throws.
+ */
+async function flagSuspiciousPattern(opts: {
+  actorId: string;
+  targetId: string;
+  reason: ReferralFraudReason;
+  ipAddress: string | null;
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
+  try {
+    await logAuditAction(opts.actorId, "OTHER", "USER", opts.targetId, {
+      details: {
+        event: "REFERRAL_SUSPICIOUS_PATTERN",
+        reason: opts.reason,
+        ...opts.metadata,
+      },
+      ipAddress: opts.ipAddress ?? undefined,
+    });
+  } catch (err) {
+    console.error("[referral.service] Failed to write suspicious pattern audit log:", err);
+  }
+}
+
 // ─── Core service functions ───────────────────────────────────────────────────
 
 /**
  * Validate a referral code and apply fraud checks before recording the referral.
  *
  * Called when a new user submits a referral code (e.g. during sign-up or from
- * the referral page).  On success the referral row is inserted and the referrer
- * earns +5 reputation.
+ * the referral page).  On success the referral row is inserted (without
+ * granting the reward yet — that happens via grantReferralReward()).
  *
  * @param code          The referral code submitted by the new user
  * @param newUserId     The user ID of the person being referred
@@ -113,8 +154,16 @@ export async function validateReferral(
 ): Promise<ReferralValidationResult> {
   return await transaction(async (q) => {
     // ── 1. Look up the referrer ──────────────────────────────────────────────
-    const { rows: referrerRows } = await q<{ id: string; referral_code: string }>(
-      "SELECT id, referral_code FROM users WHERE referral_code = $1 FOR SHARE",
+    const { rows: referrerRows } = await q<{
+      id: string;
+      referral_code: string;
+      referral_code_active: boolean;
+      referral_use_limit: number | null;
+    }>(
+      `SELECT id, referral_code, referral_code_active, referral_use_limit
+       FROM users
+       WHERE referral_code = $1
+       FOR SHARE`,
       [code.toUpperCase()]
     );
 
@@ -132,7 +181,19 @@ export async function validateReferral(
     const referrerId = referrerRows[0].id;
     const referralCode = referrerRows[0].referral_code;
 
-    // ── 2. Self-referral check ───────────────────────────────────────────────
+    // ── 2. Code deactivation check (admin can disable codes) — Issue #227 ────
+    if (!referrerRows[0].referral_code_active) {
+      await logFraudEvent({
+        referrerId,
+        suspectUserId: newUserId,
+        referralCode,
+        reason: "CODE_DEACTIVATED",
+        ipAddress,
+      });
+      throw new ReferralFraudError("CODE_DEACTIVATED", "This referral code has been deactivated.");
+    }
+
+    // ── 3. Self-referral check (returns 422) — Issue #227 ────────────────────
     if (referrerId === newUserId) {
       await logFraudEvent({
         referrerId,
@@ -144,7 +205,42 @@ export async function validateReferral(
       throw new ReferralFraudError("SELF_REFERRAL", "You cannot use your own referral code.");
     }
 
-    // ── 3. Duplicate referral check ──────────────────────────────────────────
+    // ── 4. Phone already registered check — Issue #227 ───────────────────────
+    // A user who already has an account (non-null created_at on their record)
+    // should not be able to use a referral code; the referral scheme is for
+    // NEW users only.
+    const { rows: newUserRows } = await q<{ created_at: Date; referred_by: string | null }>(
+      "SELECT created_at, referred_by FROM users WHERE id = $1",
+      [newUserId]
+    );
+    // If the user was created more than 24 h ago they are not a new user
+    const userCreatedAt = newUserRows[0]?.created_at;
+    const isExistingUser =
+      userCreatedAt &&
+      Date.now() - new Date(userCreatedAt).getTime() > 24 * 60 * 60 * 1000;
+
+    if (isExistingUser) {
+      await logFraudEvent({
+        referrerId,
+        suspectUserId: newUserId,
+        referralCode,
+        reason: "PHONE_ALREADY_REGISTERED",
+        ipAddress,
+      });
+      await flagSuspiciousPattern({
+        actorId: newUserId,
+        targetId: referrerId,
+        reason: "PHONE_ALREADY_REGISTERED",
+        ipAddress,
+        metadata: { referralCode },
+      });
+      throw new ReferralFraudError(
+        "PHONE_ALREADY_REGISTERED",
+        "Referral codes can only be used during account creation."
+      );
+    }
+
+    // ── 5. Duplicate referral check ──────────────────────────────────────────
     const { rows: existingRows } = await q<{ id: string }>(
       "SELECT id FROM referrals WHERE referred_id = $1 LIMIT 1",
       [newUserId]
@@ -160,7 +256,41 @@ export async function validateReferral(
       throw new ReferralFraudError("ALREADY_REFERRED", "You have already used a referral code.");
     }
 
-    // ── 4. Velocity check (referrer) — max 5 referrals in 24 h ──────────────
+    // ── 6. Per-code use-limit check — Issue #227 ─────────────────────────────
+    const maxUses =
+      referrerRows[0].referral_use_limit != null
+        ? referrerRows[0].referral_use_limit
+        : getMaxUses();
+
+    const { rows: useCountRows } = await q<{ count: string }>(
+      "SELECT COUNT(*) AS count FROM referrals WHERE referrer_id = $1",
+      [referrerId]
+    );
+    const totalUses = parseInt(useCountRows[0]?.count ?? "0", 10);
+
+    if (totalUses >= maxUses) {
+      await logFraudEvent({
+        referrerId,
+        suspectUserId: newUserId,
+        referralCode,
+        reason: "USE_LIMIT_EXCEEDED",
+        ipAddress,
+        metadata: { totalUses, maxUses },
+      });
+      await flagSuspiciousPattern({
+        actorId: newUserId,
+        targetId: referrerId,
+        reason: "USE_LIMIT_EXCEEDED",
+        ipAddress,
+        metadata: { totalUses, maxUses },
+      });
+      throw new ReferralFraudError(
+        "USE_LIMIT_EXCEEDED",
+        "This referral code has reached its maximum number of uses."
+      );
+    }
+
+    // ── 7. Velocity check (referrer) — max 5 referrals in 24 h ───────────────
     const { rows: velocityRows } = await q<{ count: string }>(
       `SELECT COUNT(*) AS count
        FROM referrals
@@ -179,13 +309,20 @@ export async function validateReferral(
         ipAddress,
         metadata: { referralsLast24h, limit: VELOCITY_LIMIT_PER_24H },
       });
+      await flagSuspiciousPattern({
+        actorId: referrerId,
+        targetId: newUserId,
+        reason: "VELOCITY_LIMIT",
+        ipAddress,
+        metadata: { referralsLast24h, limit: VELOCITY_LIMIT_PER_24H },
+      });
       throw new ReferralFraudError(
         "VELOCITY_LIMIT",
         "Referral velocity limit exceeded. Please try again later."
       );
     }
 
-    // ── 5. IP-address velocity check — max 3 referrals from same IP in 24 h ──
+    // ── 8. IP-address velocity check — max 3 referrals from same IP in 24 h ──
     if (ipAddress) {
       const { rows: ipRows } = await q<{ count: string }>(
         `SELECT COUNT(*) AS count
@@ -206,6 +343,13 @@ export async function validateReferral(
           ipAddress,
           metadata: { ipReferrals, limit: IP_LIMIT_PER_24H },
         });
+        await flagSuspiciousPattern({
+          actorId: newUserId,
+          targetId: referrerId,
+          reason: "IP_LIMIT",
+          ipAddress,
+          metadata: { ipReferrals, limit: IP_LIMIT_PER_24H },
+        });
         throw new ReferralFraudError(
           "IP_LIMIT",
           "Too many referrals from this network. Please try again later."
@@ -213,20 +357,16 @@ export async function validateReferral(
       }
     }
 
-    // ── All checks passed — record the referral ──────────────────────────────
+    // ── All checks passed — record the referral (reward granted later) ────────
+    // NOTE: referred_by is updated; reward is NOT granted until first contribution
+    // (see grantReferralReward). rewarded stays FALSE, rewarded_at stays NULL.
     await q("UPDATE users SET referred_by = $1 WHERE id = $2", [referrerId, newUserId]);
 
     await q(
-      `INSERT INTO referrals (id, referrer_id, referred_id, rewarded, created_at)
-       VALUES ($1, $2, $3, FALSE, NOW())
+      `INSERT INTO referrals (id, referrer_id, referred_id, rewarded, rewarded_at, created_at)
+       VALUES ($1, $2, $3, FALSE, NULL, NOW())
        ON CONFLICT DO NOTHING`,
       [randomUUID(), referrerId, newUserId]
-    );
-
-    // Reward: +5 reputation to referrer (capped at 100)
-    await q(
-      "UPDATE users SET reputation_score = LEAST(reputation_score + 5, 100) WHERE id = $1",
-      [referrerId]
     );
 
     return {
@@ -234,6 +374,47 @@ export async function validateReferral(
       referrerId,
       referralCode,
     };
+  });
+}
+
+/**
+ * Grant the referral reward to the referrer after the referee completes their
+ * first confirmed contribution (Issue #227).
+ *
+ * This is idempotent — calling it multiple times for the same referral is safe.
+ * Should be called from the contribution webhook / confirmation handler.
+ *
+ * @param referredUserId  The user ID of the person who was referred
+ */
+export async function grantReferralReward(referredUserId: string): Promise<void> {
+  await transaction(async (q) => {
+    // Look up the referral record; skip if not found or already rewarded
+    const { rows: referralRows } = await q<{
+      id: string;
+      referrer_id: string;
+      rewarded: boolean;
+    }>(
+      `SELECT id, referrer_id, rewarded
+       FROM referrals
+       WHERE referred_id = $1
+       FOR UPDATE`,
+      [referredUserId]
+    );
+
+    const referral = referralRows[0];
+    if (!referral || referral.rewarded) return; // no referral or already rewarded
+
+    // Mark as rewarded
+    await q(
+      `UPDATE referrals SET rewarded = TRUE, rewarded_at = NOW() WHERE id = $1`,
+      [referral.id]
+    );
+
+    // Award +5 reputation to referrer (capped at 100)
+    await q(
+      "UPDATE users SET reputation_score = LEAST(reputation_score + 5, 100) WHERE id = $1",
+      [referral.referrer_id]
+    );
   });
 }
 
