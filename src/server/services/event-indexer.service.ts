@@ -7,7 +7,7 @@
  *   contribution_made  → confirm matching pending contribution
  *   payout_sent        → record payout + mark member as received
  *   member_defaulted   → mark member status = 'defaulted'
- *   circle_completed   → mark circle status = 'completed'
+ *   circle_completed   → mark circle status = 'completed' + queue certificates
  *   member_joined      → stored for audit; no extra DB side-effect needed
  *
  * Checkpoint: last_indexed_ledger stored in indexer_state per contract.
@@ -18,6 +18,7 @@ import { serverConfig } from "@/server/config";
 import { query } from "@/lib/db";
 import { randomUUID } from "crypto";
 import { incrementReputationOnContribution } from "./reputation.service";
+import { queueCertificatesForCircle } from "./certificate.service";
 
 const POLL_INTERVAL_MS = parseInt(process.env.EVENT_INDEXER_POLL_MS ?? "15000", 10);
 const CONTRACT_ID = serverConfig.stellar.ajoContractId;
@@ -235,5 +236,7 @@ async function onCircleCompleted(val: any): Promise<void> {
     "UPDATE circles SET status = 'completed', updated_at = NOW() WHERE id = $1 AND status != 'completed'",
     [val.circle_id]
   );
+  // Queue on-chain completion certificates for every member (#241).
+  await queueCertificatesForCircle(val.circle_id);
   console.log(`[event-indexer] circle_completed → circle ${val.circle_id} marked completed`);
 }

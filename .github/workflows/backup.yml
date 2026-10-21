@@ -5,6 +5,9 @@ on:
     - cron: "0 2 * * *"   # 02:00 UTC daily
   workflow_dispatch:        # allow manual trigger
 
+permissions:  # least-privilege CI tokens (#108)
+  contents: read
+
 jobs:
   backup:
     name: Backup to S3
@@ -36,3 +39,8 @@ jobs:
         if: failure()
         run: |
           echo "::error::PostgreSQL backup failed — check logs immediately"
+          curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "text": ":red_circle: *Ajosave PostgreSQL backup FAILED*\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
+            }'

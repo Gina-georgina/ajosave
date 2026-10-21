@@ -23,3 +23,67 @@ ignore:
   - "src/app/**/error.tsx"
   - "scripts/**"
   - "migrations/**"
+
+# Per-area coverage ownership (see docs/coverage-ownership.md and .github/CODEOWNERS).
+# Each component gets its own project status so a drop in a critical area cannot
+# be hidden by gains elsewhere. Every path below must be covered by CODEOWNERS;
+# src/__tests__/coverage-ownership.test.ts enforces that.
+component_management:
+  default_rules:
+    statuses:
+      - type: project
+        target: auto
+        threshold: 2%
+  individual_components:
+    - component_id: auth-sessions
+      name: Auth & sessions
+      paths:
+        - src/lib/auth.ts
+        - src/lib/tokens.ts
+        - src/lib/refresh-tokens.ts
+        - src/lib/sessions.ts
+        - src/lib/session-middleware.ts
+        - src/lib/cookies.ts
+        - src/lib/lockout.ts
+        - src/middleware.ts
+        - src/app/api/auth/**
+        - src/app/api/v1/auth/**
+    - component_id: payments
+      name: Payments & webhooks
+      paths:
+        - src/lib/paystack.ts
+        - src/lib/payment-state-machine.ts
+        - src/lib/reconciliation.ts
+        - src/lib/money.ts
+        - src/lib/webhook-replay.ts
+        - src/lib/outbox.ts
+        - src/app/api/webhooks/**
+        - src/app/api/v1/webhooks/**
+        - src/app/api/admin/payouts/**
+        - src/app/api/user/contributions/**
+    - component_id: circles
+      name: Circles
+      paths:
+        - src/lib/circle-lifecycle.ts
+        - src/lib/reputation.ts
+        - src/app/api/circles/**
+        - src/app/api/v1/circles/**
+    - component_id: stellar
+      name: Stellar integration
+      paths:
+        - src/lib/stellar.ts
+        - src/lib/soroban.ts
+    - component_id: server-platform
+      name: Server platform
+      paths:
+        - src/server/**
+        - src/lib/rate-limit-policies.ts
+        - src/lib/redis.ts
+        - src/lib/db.ts
+        - src/app/api/cron/**
+        - src/app/api/v1/cron/**
+    - component_id: ui
+      name: UI
+      paths:
+        - src/components/**
+        - src/hooks/**

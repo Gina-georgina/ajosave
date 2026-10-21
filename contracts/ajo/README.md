@@ -78,6 +78,16 @@ State transitions are enforced by the contract — there is no admin escape hatc
 
 Sets up the circle. Stores all parameters and emits an `initialized` event.
 
+Validation:
+- `admin` and `token` must differ, and neither may be the contract's own address.
+- `cycle_interval_secs` must be within `1..=31_536_000` (365 days) so payout scheduling cannot overflow.
+- `contribution_amount * max_members` must fit in `i128`.
+
+### `set_payout_order(env, order)`
+
+Admin-only, before the circle starts. `order` must be a permutation of `0..max_members`
+(correct length, every index in range, no duplicates).
+
 ### `join(env, member)`
 
 - Requires `member` auth.
@@ -131,7 +141,7 @@ The contract uses three storage types to optimize ledger fees:
 |------|------|----------|---------|
 | Instance | Admin, Token, ContributionAmount, MaxMembers, CycleIntervalSecs, Members, PayoutOrder, CurrentCycle, NextPayoutTime, Completed, Paused, PayoutLock | Contract lifetime | Core circle configuration |
 | Temporary | Contributions(Address, u32) | Auto-expire (~3.5 days) | Per-cycle contribution tracking |
-| Persistent | MemberReputation, TotalCirclesCompleted, OnTimeContributions, TotalContributions | 30 days | Member reputation (survives upgrades) |
+| Persistent | MemberStats (packed: reputation, circles, on-time/total/missed counts, suspended) | 30 days | Per-member state (survives upgrades) |
 
 ### Optimization Benefits
 
@@ -326,3 +336,23 @@ Set in your environment:
 ```bash
 STELLAR_AJO_CONTRACT_ID=CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC
 ```
+
+## Missed Contribution Policy
+
+At each `payout`, members who did not contribute for the cycle get a
+`contribution_missed` event and their lifetime missed counter (`MemberStats.missed_contributions`)
+increments (it also counts against on-time reputation). Once a member reaches
+the admin-configured threshold (`set_missed_policy`, default `1`, range
+`1..=max_members`) they are suspended (`member_suspended` event) and
+`contribute` rejects them until the admin calls `reinstate_member`.
+
+Read-only: `get_missed_policy`, `get_missed_contributions`, `is_suspended`.
+
+## Temporary Storage TTL
+
+Per-cycle contribution flags live in temporary storage. Each write extends the
+entry's TTL to cover the cycle interval plus a one-day buffer (minimum 7 days,
+capped at the network max TTL), so an entry cannot expire before `payout` reads
+it. Entries are removed when the circle completes. `set_ttl_config` now
+validates `1 <= threshold <= extend_to`, `extend_to >= 1 day` and
+`extend_to <= max_ttl`, and emits `ttl_config_updated`.
