@@ -29,6 +29,7 @@ export const POLICIES: RetentionPolicy[] = [
   { table: "processed_webhooks", column: "created_at", days: 30 },
   { table: "sms_logs", column: "created_at", days: 90 },
   { table: "outbox_events", column: "processed_at", days: 30, where: "processed_at IS NOT NULL" },
+  { table: "invite_tokens", column: "expires_at", days: 14 },
 ];
 
 export interface RetentionResult {
