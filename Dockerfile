@@ -1,33 +1,25 @@
-FROM node:20-alpine AS base
+# ── deps: full dependency install (build needs devDependencies) ──────────────
+FROM node:20-alpine AS deps
 WORKDIR /app
-COPY package*.json ./
-
-# ── deps: install production deps only ────────────────────────────────────────
-FROM base AS deps
-RUN npm ci --omit=dev
-
-# ── builder: full install + build ─────────────────────────────────────────────
-FROM base AS builder
+COPY package.json package-lock.json ./
 RUN npm ci
+
+# ── builder: Next.js production build + runtime tree assembly ────────────────
+FROM deps AS builder
 COPY . .
 RUN npm run build
+# Assembles /runtime: standalone server + static + public + the
+# @stellar/stellar-sdk dependency closure (see scripts/docker-external-deps.js)
+RUN node scripts/docker-external-deps.js
 
-# ── runner: lean production image ─────────────────────────────────────────────
+# ── runner: minimal non-root production image ────────────────────────────────
 FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+# node:alpine ships a non-root `node` user (UID/GID 1000)
+COPY --from=builder --chown=node:node /runtime ./
+USER node
 
-COPY --from=deps /app/node_modules ./node_modules
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public 2>/dev/null || true
-COPY --from=builder /app/next.config.mjs ./
-COPY --from=builder /app/migrations ./migrations
-COPY --from=builder /app/scripts/migrate.ts ./scripts/migrate.ts
-COPY --from=builder /app/tsconfig.json ./
-COPY package.json ./
-
-USER appuser
 EXPOSE 3000
-CMD ["sh", "-c", "node_modules/.bin/ts-node scripts/migrate.ts up && node_modules/.bin/next start"]
+CMD ["node", "server.js"]
