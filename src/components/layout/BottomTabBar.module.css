@@ -1,0 +1,97 @@
+/* ─── Bottom Tab Bar ────────────────────────────────────────────────────────── */
+/* Visible only on mobile (≤ 767px). Hidden at tablet widths and above.        */
+
+.tabBar {
+  display: none; /* hidden by default; enabled via media query below */
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  height: 60px;
+  background: var(--color-bg-surface, #ffffff);
+  border-top: 1px solid var(--color-border-subtle, rgba(0, 0, 0, 0.08));
+  box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.06);
+
+  /* Flex layout — four equal-width tabs */
+  flex-direction: row;
+  align-items: stretch;
+
+  /* Safe area inset for devices with home indicator (iPhone X+) */
+  padding-bottom: env(safe-area-inset-bottom, 0);
+
+  /* Prevent the bar from being covered when a software keyboard is open.       */
+  /* Most modern mobile browsers automatically shift `fixed` elements when the  */
+  /* keyboard opens, but `interactive-widget` in the viewport meta helps too.   */
+}
+
+[data-theme="dark"] .tabBar {
+  background: var(--color-bg-surface-dark, #0f172a);
+  border-top-color: rgba(255, 255, 255, 0.06);
+  box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.3);
+}
+
+/* ─── Only show on mobile ────────────────────────────────────────────────────── */
+@media (max-width: 767px) {
+  .tabBar {
+    display: flex;
+  }
+}
+
+/* ─── Individual tab ──────────────────────────────────────────────────────────── */
+.tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  color: var(--color-text-muted, #9ca3af);
+  text-decoration: none;
+  transition: color 0.15s ease;
+  min-width: 0;
+  padding: 0 var(--space-1, 4px);
+
+  /* Increase tap target to at least 44×44 px (WCAG 2.5.5) */
+  min-height: 44px;
+}
+
+.tab:hover,
+.tab:focus-visible {
+  color: var(--color-brand-primary, #10b981);
+  outline: none;
+}
+
+.tab:focus-visible {
+  outline: 2px solid var(--color-brand-primary, #10b981);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm, 4px);
+}
+
+/* Active / current page */
+.tabActive {
+  color: var(--color-brand-primary, #10b981);
+}
+
+/* ─── Icon wrapper ─────────────────────────────────────────────────────────────── */
+.tabIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+/* ─── Label ─────────────────────────────────────────────────────────────────────── */
+.tabLabel {
+  font-size: 0.625rem; /* 10 px */
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.03em;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}

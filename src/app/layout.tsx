@@ -24,6 +24,14 @@ export const metadata: Metadata = {
     title: "STELLAR",
     description: "Trustless rotating savings on Stellar.",
   },
+  // Allow mobile browsers to resize the viewport when the software keyboard opens.
+  // This is the primary mechanism that ensures the bottom tab bar slides out of view
+  // when an input field has focus and the keyboard is visible.
+  viewport: {
+    width: "device-width",
+    initialScale: 1,
+    interactiveWidget: "resizes-visual",
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
