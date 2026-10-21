@@ -51,6 +51,25 @@ jobs:
           vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
           vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
           vercel-args: "--prebuilt"
+      - name: Verify security headers
+        run: |
+          set -euo pipefail
+          URL="${{ steps.vercel.outputs.deployment_url }}"
+          if [ -z "$URL" ]; then URL="${{ vars.STAGING_URL }}"; fi
+          echo "Checking security headers on $URL"
+          HEADERS=$(curl -sSIL --max-time 60 "$URL")
+          echo "$HEADERS"
+          echo "$HEADERS" | grep -qi "^strict-transport-security:.*max-age=63072000.*includeSubDomains.*preload" \
+            || { echo "::error::Strict-Transport-Security header missing or incomplete"; exit 1; }
+          echo "$HEADERS" | grep -qi "^x-content-type-options: *nosniff" \
+            || { echo "::error::X-Content-Type-Options: nosniff missing"; exit 1; }
+          echo "$HEADERS" | grep -qi "^x-frame-options: *DENY" \
+            || { echo "::error::X-Frame-Options: DENY missing"; exit 1; }
+          echo "$HEADERS" | grep -qi "^referrer-policy: *strict-origin-when-cross-origin" \
+            || { echo "::error::Referrer-Policy missing or unexpected value"; exit 1; }
+          echo "$HEADERS" | grep -qi "^permissions-policy:.*camera=().*microphone=().*geolocation=()" \
+            || { echo "::error::Permissions-Policy missing or incomplete"; exit 1; }
+          echo "All required security headers present."
       - name: Post Staging URL to PR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/github-script@v7
