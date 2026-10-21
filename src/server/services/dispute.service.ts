@@ -1,6 +1,7 @@
 import { query } from "@/lib/db";
 import { randomUUID } from "crypto";
 import type { Dispute, DisputeType, DisputeStatus } from "@/types";
+import { recordDisputeEvent } from "./dispute-timeline.service";
 
 const DISPUTE_SELECT = `
   id, contribution_id as "contributionId", member_id as "memberId",
@@ -25,6 +26,9 @@ export async function createDispute(
      RETURNING ${DISPUTE_SELECT}`,
     [randomUUID(), contributionId || null, memberId, circleId, paystackReference || null, type, reason, evidence || null]
   );
+
+  await recordDisputeEvent(rows[0].id, "created", memberId, reason);
+  if (evidence) await recordDisputeEvent(rows[0].id, "evidence_added", memberId, evidence);
 
   // Notify admins asynchronously
   notifyAdminsOfNewDispute(circleId, reason, type).catch((err) =>
@@ -89,6 +93,7 @@ export async function updateDisputeStatus(
     `UPDATE disputes SET status = $2 WHERE id = $1 RETURNING ${DISPUTE_SELECT}`,
     [disputeId, status]
   );
+  if (rows[0]) await recordDisputeEvent(disputeId, "status_changed", null, status);
   return rows[0];
 }
 
@@ -105,6 +110,7 @@ export async function resolveDispute(
      RETURNING ${DISPUTE_SELECT}`,
     [disputeId, status, resolutionNotes, resolvedBy]
   );
+  if (rows[0]) await recordDisputeEvent(disputeId, "resolved", resolvedBy, `${status}: ${resolutionNotes}`);
   return rows[0];
 }
 

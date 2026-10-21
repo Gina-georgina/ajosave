@@ -76,9 +76,18 @@
   /* Transitions */
   --transition-fast: 120ms ease;
   --transition-base: 200ms ease;
+  --transition-normal: 200ms ease;
 
   /* Layout */
   --max-width-xl: 1280px;
   --max-width-content: 720px;
   --max-width-sm: 640px;
+}
+
+/* ─── Bottom tab bar layout token ───────────────────────────────────────────── */
+/* Applied as bottom padding on <main> so content is never obscured on mobile.  */
+@media (max-width: 767px) {
+  :root {
+    --bottom-tab-bar-height: 60px;
+  }
 }

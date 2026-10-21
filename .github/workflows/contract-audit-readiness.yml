@@ -1,0 +1,79 @@
+name: Contract Audit Readiness
+
+# Keeps the Soroban contracts audit-ready (see docs/external-contract-audit.md):
+#  - dependency vulnerability scan of the contracts workspace
+#  - a paper trail whenever contract source changes after the audited commit
+
+on:
+  pull_request:
+    paths:
+      - "contracts/**"
+      - "docs/external-contract-audit.md"
+      - "docs/audits/**"
+      - ".github/workflows/contract-audit-readiness.yml"
+  schedule:
+    - cron: "0 4 * * 1" # Weekly on Monday at 04:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-audit:
+    name: cargo audit (contracts)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts
+
+      - name: Install cargo-audit
+        run: cargo install --locked cargo-audit
+
+      - name: Audit contracts/Cargo.lock
+        working-directory: contracts
+        run: cargo audit
+
+  audit-trail:
+    name: Contract changes update audit status
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require an audit-status update when contract source changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          changed=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+
+          # Contract source, excluding tests, benchmarks and fuzz code.
+          src=$(echo "$changed" \
+            | grep -E '^contracts/[^/]+/src/.*\.rs$' \
+            | grep -Ev '(test|bench|fuzz)' || true)
+
+          if [ -z "$src" ]; then
+            echo "No contract source changes."
+            exit 0
+          fi
+
+          if echo "$changed" | grep -Eq '^(docs/external-contract-audit\.md|docs/audits/)'; then
+            echo "Contract source changed and audit status was updated."
+            exit 0
+          fi
+
+          echo "::error::Contract source changed but audit status was not updated."
+          echo "Changed contract files:"
+          echo "$src"
+          echo "Record the change in docs/audits/README.md ('Changes since the audited commit')"
+          echo "and whether a re-audit is needed. See docs/external-contract-audit.md."
+          exit 1

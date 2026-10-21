@@ -1,0 +1,131 @@
+name: Accessibility CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: accessibility-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  axe-scan:
+    name: Axe Accessibility Scan
+    runs-on: ubuntu-latest
+    env:
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      NEXT_PUBLIC_APP_NAME: STELLAR
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: ci-secret-placeholder
+      DATABASE_URL: postgresql://user:password@localhost:5432/stellar
+      STELLAR_NETWORK: testnet
+      STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
+      STELLAR_NETWORK_PASSPHRASE: "Test SDF Network ; September 2015"
+      STELLAR_SERVER_SECRET_KEY: SXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+      USDC_ISSUER: GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
+      USDC_ASSET_CODE: USDC
+      PAYSTACK_SECRET_KEY: sk_test_placeholder
+      TERMII_API_KEY: placeholder
+      REDIS_URL: redis://localhost:6379
+      CRON_SECRET: placeholder
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Build Next.js app
+        run: npm run build
+
+      - name: Start app in background
+        run: npm start &
+        env:
+          PORT: 3000
+
+      - name: Wait for app to be ready
+        run: npx wait-on http://localhost:3000 --timeout 60000
+
+      - name: Run axe accessibility scans
+        run: npx playwright test e2e/accessibility/ --reporter=github,json
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: axe-results.json
+        continue-on-error: false
+        env:
+          A11Y_REPORT_DIR: test-results
+
+      - name: Count axe violations (regression baseline)
+        if: always()
+        run: |
+          # Extract total test counts from the JSON report for tracking purposes.
+          # A non-zero exit from the playwright step above is the authoritative gate;
+          # this step surfaces the numbers in the workflow summary for trending.
+          if [ -f axe-results.json ]; then
+            PASSED=$(jq '.suites | .. | objects | .specs? // [] | .[] | select(.ok == true) | .title' axe-results.json 2>/dev/null | wc -l || echo "0")
+            FAILED=$(jq '.suites | .. | objects | .specs? // [] | .[] | select(.ok == false) | .title' axe-results.json 2>/dev/null | wc -l || echo "0")
+            echo "### Axe Accessibility Scan Results" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Status | Count |" >> "$GITHUB_STEP_SUMMARY"
+            echo "|--------|-------|" >> "$GITHUB_STEP_SUMMARY"
+            echo "| ✅ Passed | $PASSED |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| ❌ Failed | $FAILED |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload axe results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: axe-results
+          path: |
+            playwright-report/
+            test-results/a11y-report.json
+          retention-days: 7
+
+  lighthouse-a11y:
+    name: Lighthouse Accessibility Audit
+    runs-on: ubuntu-latest
+    needs: []
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build app
+        run: npm run build
+        env:
+          NEXT_PUBLIC_APP_URL: http://localhost:3000
+          NEXT_PUBLIC_APP_NAME: STELLAR
+          NEXTAUTH_URL: http://localhost:3000
+          NEXTAUTH_SECRET: ci-secret-placeholder
+          DATABASE_URL: postgresql://user:password@localhost:5432/stellar
+          STELLAR_NETWORK: testnet
+          STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
+          STELLAR_NETWORK_PASSPHRASE: "Test SDF Network ; September 2015"
+          STELLAR_SERVER_SECRET_KEY: SXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+          USDC_ISSUER: GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
+          USDC_ASSET_CODE: USDC
+          PAYSTACK_SECRET_KEY: sk_test_placeholder
+          TERMII_API_KEY: placeholder
+          REDIS_URL: redis://localhost:6379
+          CRON_SECRET: placeholder
+
+      - name: Run Lighthouse CI
+        uses: treosh/lighthouse-ci-action@v12
+        with:
+          configPath: .lighthouserc.json
+          uploadArtifacts: true
+          temporaryPublicStorage: true
