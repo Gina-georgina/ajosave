@@ -3,6 +3,10 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
+permissions:  # least-privilege CI tokens (#108)
+  contents: read
+  pull-requests: write   # post PR comments / labels
+
 jobs:
   validate-title:
     name: Validate PR Title

@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { NextResponse } from "next/server";
 import { revokeAllUserTokens } from "@/lib/refresh-tokens";
+import { clearRefreshTokenCookie } from "@/lib/cookies";
 import type { ApiResponse } from "@/types";
 
 /**
@@ -35,13 +36,7 @@ export async function POST() {
     { status: 200 }
   );
 
-  response.cookies.set("refreshToken", "", {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    maxAge: 0,
-    path: "/",
-  });
+  clearRefreshTokenCookie(response);
 
   return response;
 }

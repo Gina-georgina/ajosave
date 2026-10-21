@@ -5,6 +5,7 @@ import { query } from "@/lib/db";
 import { SignJWT } from "jose";
 import { serverConfig } from "@/server/config";
 import type { ApiResponse } from "@/types";
+import { setRefreshTokenCookie } from "@/lib/cookies";
 
 const SECRET = new TextEncoder().encode(serverConfig.authSecret);
 
@@ -102,13 +103,7 @@ export const POST = withRateLimit(
     );
 
     // Set refresh token in httpOnly cookie
-    response.cookies.set("refreshToken", newRefreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 7 * 24 * 60 * 60, // 7 days in seconds
-      path: "/",
-    });
+    setRefreshTokenCookie(response, newRefreshToken);
 
     return response;
   } catch (error) {

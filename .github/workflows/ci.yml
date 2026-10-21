@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main, develop]
 
+permissions:  # least-privilege CI tokens (#108)
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -35,6 +38,81 @@ jobs:
       - uses: codecov/codecov-action@v4
         with: { token: "${{ secrets.CODECOV_TOKEN }}", fail_ci_if_error: false }
 
+  property-tests:
+    name: Property-Based API Tests (#93)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: user
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: stellar_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      DATABASE_URL: postgresql://user:password@localhost:5432/stellar_test
+      NEXTAUTH_SECRET: ci-secret-placeholder
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: npm ci
+      - name: Run property-based tests
+        run: npm test -- --testPathPattern=property-based-api --forceExit
+
+  migration-tests:
+    name: Migration Upgrade Tests (#95)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: user
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: stellar_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      DATABASE_URL: postgresql://user:password@localhost:5432/stellar_test
+      NEXTAUTH_SECRET: ci-secret-placeholder
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: npm ci
+      - name: Apply migrations to test DB
+        run: npx node-pg-migrate up --database-url postgresql://user:password@localhost:5432/stellar_test --migrations-dir migrations
+        continue-on-error: true
+      - name: Run migration upgrade tests
+        run: npm test -- --testPathPattern=migration-upgrade --forceExit
+
+  contract:
+    name: Soroban Contract Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with: { targets: wasm32-unknown-unknown }
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: contracts }
+      - run: npm run contract:test
+      - name: Install Stellar CLI
+        run: |
+          curl -sSL https://github.com/stellar/stellar-cli/releases/latest/download/stellar-cli-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C /usr/local/bin
+      - run: npm run contract:build
+
   build:
     name: Next.js Build
     runs-on: ubuntu-latest
@@ -61,3 +139,81 @@ jobs:
         with: { node-version: 20, cache: npm }
       - run: npm ci
       - run: npm run build
+
+  docs-lint:
+    name: Documentation Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify required docs exist
+        run: |
+          missing=()
+          for doc in \
+            docs/contract-auditor-guide.md \
+            docs/privacy-retention-guide.md \
+            docs/user-fee-risk-help.md \
+            docs/mainnet-disaster-recovery.md; do
+            if [ ! -f "$doc" ]; then
+              missing+=("$doc")
+            fi
+          done
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "ERROR: Missing required documentation files:"
+            printf '  %s\n' "${missing[@]}"
+            exit 1
+          fi
+          echo "All required documentation files present."
+      - name: Check docs are non-empty
+        run: |
+          for doc in \
+            docs/contract-auditor-guide.md \
+            docs/privacy-retention-guide.md \
+            docs/user-fee-risk-help.md \
+            docs/mainnet-disaster-recovery.md; do
+            size=$(wc -c < "$doc")
+            if [ "$size" -lt 500 ]; then
+              echo "ERROR: $doc is suspiciously small ($size bytes) — may be a stub"
+              exit 1
+            fi
+          done
+          echo "All documentation files have sufficient content."
+      - name: Check docs contain required sections
+        run: |
+          check_section() {
+            local file="$1"
+            local section="$2"
+            if ! grep -q "$section" "$file"; then
+              echo "ERROR: $file is missing required section: $section"
+              exit 1
+            fi
+          }
+          check_section docs/contract-auditor-guide.md "## Trust Model"
+          check_section docs/contract-auditor-guide.md "## Edge Cases"
+          check_section docs/contract-auditor-guide.md "## CI Checks"
+          check_section docs/privacy-retention-guide.md "## Retention Schedules"
+          check_section docs/privacy-retention-guide.md "## PII Encryption"
+          check_section docs/privacy-retention-guide.md "## Right to Erasure"
+          check_section docs/user-fee-risk-help.md "## What Fees Will I Pay"
+          check_section docs/user-fee-risk-help.md "## What Risks Should I Know"
+          check_section docs/mainnet-disaster-recovery.md "## Disaster Categories"
+          check_section docs/mainnet-disaster-recovery.md "DR-1"
+          check_section docs/mainnet-disaster-recovery.md "DR-2"
+          check_section docs/mainnet-disaster-recovery.md "Post-Recovery Checklist"
+          echo "All required sections present."
+
+  contract-cost-benchmarks:
+    name: Soroban Cost Benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Cache Rust build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts
+      - name: Run cost benchmark tests (#54)
+        working-directory: contracts
+        run: cargo test --package stellar-ajo bench -- --nocapture

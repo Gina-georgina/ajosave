@@ -1,8 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import { DeleteAccountButton } from "@/components/ui/DeleteAccountButton";
+import { Input } from "@/components/ui/Input";
+import { useToast } from "@/components/ui/Toast";
 import styles from "./page.module.css";
 
 interface SessionInfo {
@@ -17,11 +19,21 @@ interface SessionInfo {
   isCurrent: boolean;
 }
 
+interface ReminderPreferences {
+  enabled: boolean;
+  leadHours: number[];
+  channels: string[];
+}
+
 export default function SettingsPage() {
   const { data: session } = useSession();
-  const [smsEnabled, setSmsEnabled] = useState(true);
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const { toast } = useToast();
+  const [smsEnabled, setSmsEnabled] = useState(false);
+  const [reminderPreferences, setReminderPreferences] = useState<ReminderPreferences | null>(null);
+  const [preferencesLoading, setPreferencesLoading] = useState(true);
+  const [preferencesError, setPreferencesError] = useState<string | null>(null);
+  const [smsSaving, setSmsSaving] = useState(false);
+  const [emailSaving, setEmailSaving] = useState(false);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [sessionMessage, setSessionMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -31,8 +43,36 @@ export default function SettingsPage() {
   useEffect(() => {
     if (session) {
       fetchSessions();
+      fetchPreferences();
     }
   }, [session]);
+
+  const fetchPreferences = async () => {
+    setPreferencesLoading(true);
+    setPreferencesError(null);
+    try {
+      const [profileResponse, reminderResponse] = await Promise.all([
+        fetch("/api/v1/profile"),
+        fetch("/api/user/reminder-preferences"),
+      ]);
+      const [profileJson, reminderJson] = await Promise.all([
+        profileResponse.json(),
+        reminderResponse.json(),
+      ]);
+      if (!profileResponse.ok || !profileJson.success) {
+        throw new Error(profileJson.error ?? "Failed to load notification preferences");
+      }
+      if (!reminderResponse.ok || !reminderJson.success) {
+        throw new Error(reminderJson.error ?? "Failed to load notification preferences");
+      }
+      setSmsEnabled(profileJson.data.smsNotificationsEnabled);
+      setReminderPreferences(reminderJson.data);
+    } catch (error) {
+      setPreferencesError(error instanceof Error ? error.message : "Failed to load notification preferences");
+    } finally {
+      setPreferencesLoading(false);
+    }
+  };
 
   const fetchSessions = async () => {
     setSessionsLoading(true);
@@ -129,35 +169,55 @@ export default function SettingsPage() {
     }
   };
 
-  const handleToggleSms = async () => {
-    setLoading(true);
-    setMessage(null);
-
+  const handleToggleSms = async (enabled: boolean) => {
+    const previousValue = smsEnabled;
+    setSmsEnabled(enabled);
+    setSmsSaving(true);
     try {
       const res = await fetch("/api/user/sms-preferences", {
-        method: "POST",
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: !smsEnabled }),
+        body: JSON.stringify({ enabled }),
       });
-
       const json = await res.json();
-      
-      if (!json.success) {
-        throw new Error(json.error);
-      }
-
-      setSmsEnabled(!smsEnabled);
-      setMessage({
-        type: "success",
-        text: `SMS notifications ${!smsEnabled ? "enabled" : "disabled"} successfully`,
-      });
+      if (!res.ok || !json.success) throw new Error(json.error ?? "Failed to update SMS preferences");
+      toast(`SMS notifications ${enabled ? "enabled" : "disabled"}`, "success");
     } catch (error) {
-      setMessage({
-        type: "error",
-        text: error instanceof Error ? error.message : "Failed to update preferences",
-      });
+      setSmsEnabled(previousValue);
+      toast(error instanceof Error ? error.message : "Failed to update SMS preferences", "error");
     } finally {
-      setLoading(false);
+      setSmsSaving(false);
+    }
+  };
+
+  const handleToggleEmail = async (enabled: boolean) => {
+    if (!reminderPreferences) return;
+    const previousPreferences = reminderPreferences;
+    const channels = enabled
+      ? [...new Set([...previousPreferences.channels, "email"])]
+      : previousPreferences.channels.filter((channel) => channel !== "email");
+    const nextPreferences = {
+      ...previousPreferences,
+      channels,
+      enabled: channels.length > 0 && previousPreferences.enabled,
+    };
+    setReminderPreferences(nextPreferences);
+    setEmailSaving(true);
+    try {
+      const res = await fetch("/api/user/reminder-preferences", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(nextPreferences),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error ?? "Failed to update email preferences");
+      setReminderPreferences(json.data);
+      toast(`Email reminders ${enabled ? "enabled" : "disabled"}`, "success");
+    } catch (error) {
+      setReminderPreferences(previousPreferences);
+      toast(error instanceof Error ? error.message : "Failed to update email preferences", "error");
+    } finally {
+      setEmailSaving(false);
     }
   };
 
@@ -177,11 +237,19 @@ export default function SettingsPage() {
         <h1 className={styles.title}>Settings</h1>
 
         <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Notifications</h2>
+          <h2 className={styles.sectionTitle}>Notification Preferences</h2>
+          {preferencesLoading ? (
+            <p role="status" aria-live="polite">Loading notification preferences...</p>
+          ) : preferencesError ? (
+            <div role="alert" className={`${styles.message} ${styles.error}`}>
+              {preferencesError}
+            </div>
+          ) : (
+            <>
           
           <div className={styles.settingItem}>
             <div className={styles.settingInfo}>
-              <h3 className={styles.settingName}>SMS Notifications</h3>
+              <h3 className={styles.settingName}>SMS Reminders</h3>
               <p className={styles.settingDesc}>
                 Receive text messages for payout reminders, contribution confirmations, 
                 and important circle updates.
@@ -189,30 +257,33 @@ export default function SettingsPage() {
             </div>
             
             <div className={styles.settingControl}>
-              <label className={styles.toggle} aria-label={`SMS notifications: ${smsEnabled ? "enabled" : "disabled"}`}>
-                <input
-                  type="checkbox"
-                  checked={smsEnabled}
-                  onChange={handleToggleSms}
-                  disabled={loading}
-                  aria-checked={smsEnabled}
-                />
-                <span className={styles.slider} aria-hidden="true"></span>
-              </label>
-              <span className={styles.status} aria-live="polite">
-                {smsEnabled ? "Enabled" : "Disabled"}
-              </span>
+              <Input
+                type="checkbox"
+                label="SMS notifications"
+                checked={smsEnabled}
+                onChange={(event) => handleToggleSms(event.target.checked)}
+                disabled={smsSaving}
+                aria-checked={smsEnabled}
+              />
             </div>
           </div>
 
-          {message && (
-            <div
-              className={`${styles.message} ${styles[message.type]}`}
-              role="alert"
-            >
-              {message.text}
+          <div className={styles.settingItem}>
+            <div className={styles.settingInfo}>
+              <h3 className={styles.settingName}>Email Notifications</h3>
+              <p className={styles.settingDesc}>Receive email reminders about upcoming contributions and payouts.</p>
             </div>
-          )}
+            <div className={styles.settingControl}>
+              <Input
+                type="checkbox"
+                label="Email notifications"
+                checked={reminderPreferences?.channels.includes("email") ?? false}
+                onChange={(event) => handleToggleEmail(event.target.checked)}
+                disabled={emailSaving}
+                aria-checked={reminderPreferences?.channels.includes("email") ?? false}
+              />
+            </div>
+          </div>
 
           <div className={styles.notificationTypes}>
             <h4 className={styles.typesTitle}>You will receive SMS for:</h4>
@@ -224,6 +295,8 @@ export default function SettingsPage() {
               <li>👥 Join request approvals/rejections (for private circles)</li>
             </ul>
           </div>
+            </>
+          )}
         </section>
 
         <section className={styles.section}>

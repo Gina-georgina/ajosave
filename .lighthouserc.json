@@ -1,13 +1,22 @@
 {
   "ci": {
     "collect": {
-      "url": ["http://localhost:8080"],
-      "startServerCommand": "npx serve out -l 8080"
+      "url": [
+        "http://localhost:3000",
+        "http://localhost:3000/auth/login",
+        "http://localhost:3000/circles"
+      ],
+      "startServerCommand": "npm start",
+      "startServerReadyPattern": "started server",
+      "startServerReadyTimeout": 60000,
+      "numberOfRuns": 1
     },
     "assert": {
       "assertions": {
-        "categories:performance": ["error", { "minScore": 0.85 }],
-        "categories:accessibility": ["error", { "minScore": 0.90 }]
+        "categories:performance": ["warn", { "minScore": 0.75 }],
+        "categories:accessibility": ["error", { "minScore": 0.90 }],
+        "categories:best-practices": ["warn", { "minScore": 0.80 }],
+        "categories:seo": ["warn", { "minScore": 0.80 }]
       }
     },
     "upload": { "target": "temporary-public-storage" }

@@ -52,7 +52,8 @@ mod integration {
         let client = AjoContractClient::new(&env, &contract_id);
 
         let interval: u64 = 86_400; // 1 day
-        client.initialize(&admin, &token_id, &contribution, &max_members, &interval);
+        // admin is also the token issuer (admin of the stellar asset contract)
+        client.initialize(&admin, &token_id, &admin, &contribution, &max_members, &interval);
 
         // SAFETY: The env outlives the fixture; we extend lifetime for convenience in tests.
         let token: TokenClient<'static> = unsafe { std::mem::transmute(token) };
@@ -133,7 +134,7 @@ let (cycle, max, _, completed, _) = client.get_state();
     fn test_double_initialize_panics() {
         let f = setup_fixture(2);
         let token_id = f.env.register_stellar_asset_contract(f.admin.clone());
-        f.client.initialize(&f.admin, &token_id, &100_000_000, &2, &86_400);
+        f.client.initialize(&f.admin, &token_id, &f.admin, &100_000_000, &2, &86_400);
     }
 
     /// initialize: rejects max_members < 2
@@ -146,7 +147,7 @@ let (cycle, max, _, completed, _) = client.get_state();
         let token_id = env.register_stellar_asset_contract(admin.clone());
         let contract_id = env.register_contract(None, AjoContract);
         let client = AjoContractClient::new(&env, &contract_id);
-        client.initialize(&admin, &token_id, &100_000_000, &1, &86_400);
+        client.initialize(&admin, &token_id, &admin, &100_000_000, &1, &86_400);
     }
 
     /// initialize: rejects max_members > 20
@@ -159,7 +160,35 @@ let (cycle, max, _, completed, _) = client.get_state();
         let token_id = env.register_stellar_asset_contract(admin.clone());
         let contract_id = env.register_contract(None, AjoContract);
         let client = AjoContractClient::new(&env, &contract_id);
-        client.initialize(&admin, &token_id, &100_000_000, &21, &86_400);
+        client.initialize(&admin, &token_id, &admin, &100_000_000, &21, &86_400);
+    }
+
+    /// initialize: token issuer safeguard — rejects an address that isn't a
+    /// real SEP-41 token contract (issue #58), instead of persisting it and
+    /// only failing later inside `join`/`contribute`/`payout`.
+    #[test]
+    #[should_panic]
+    fn test_initialize_rejects_non_token_address() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+
+        // A real (non-token) contract, standing in for a bad/malicious
+        // "token" address an admin could otherwise fat-finger into `initialize`.
+        let not_a_token = env.register_contract(None, AjoContract);
+
+        let contract_id = env.register_contract(None, AjoContract);
+        let client = AjoContractClient::new(&env, &contract_id);
+        client.initialize(&admin, &not_a_token, &100_000_000, &2, &86_400);
+    }
+
+    /// get_token: returns the exact token address configured at initialize,
+    /// so integrators can verify a deployed circle's asset/issuer on-chain.
+    #[test]
+    fn test_get_token_returns_configured_token() {
+        let f = setup_fixture(2);
+        let token_address = f.token.address.clone();
+        assert_eq!(f.client.get_token(), token_address);
     }
 
     /// join: rejects duplicate member
@@ -346,7 +375,72 @@ let (cycle, max, _, completed, _) = client.get_state();
         f.client.payout(); // must panic: "payout already in progress"
     }
 
-        // ─── Upgrade tests ────────────────────────────────────────────────────────
+    // ─── Fund-locking review checklist tests (issue #60) ─────────────────────
+    //
+    // These cover the custody invariants called out in
+    // contracts/ajo/FUND_LOCKING_CHECKLIST.md: the emergency pause must
+    // actually stop fund movement in both directions, and a fully-funded
+    // payout must fully drain the pot it pays out (no residual dust left
+    // locked in the contract).
+
+    /// pause: blocks contribute while paused, so a member's funds stay in
+    /// their own account rather than moving into a frozen contract.
+    #[test]
+    #[should_panic(expected = "contract is paused")]
+    fn test_paused_blocks_contribute() {
+        let f = setup_fixture(2);
+        for m in f.members.iter() { f.client.join(m); }
+        f.client.pause();
+        f.client.contribute(&f.members.get(0).unwrap(), &f.contribution);
+    }
+
+    /// pause: blocks payout while paused, so pooled member funds stay put
+    /// instead of being paid out while the circle is frozen for review.
+    #[test]
+    #[should_panic(expected = "contract is paused")]
+    fn test_paused_blocks_payout() {
+        let f = setup_fixture(2);
+        for m in f.members.iter() { f.client.join(m); }
+        f.env.ledger().with_mut(|l| l.timestamp = f.interval + 1);
+        f.client.pause();
+        f.client.payout();
+    }
+
+    /// unpause: restores normal fund movement — funds are not permanently
+    /// stuck once the emergency pause is lifted.
+    #[test]
+    fn test_unpause_restores_payout() {
+        let f = setup_fixture(2);
+        for m in f.members.iter() { f.client.join(m); }
+        f.env.ledger().with_mut(|l| l.timestamp = f.interval + 1);
+
+        f.client.pause();
+        f.client.unpause();
+
+        f.client.payout(); // must succeed now that the pause has been lifted
+        let (cycle, _, _, _, _) = f.client.get_state();
+        assert_eq!(cycle, 2);
+    }
+
+    /// Fund custody: a fully-contributed cycle's payout drains the contract's
+    /// own token balance to exactly zero — no residual funds are left locked
+    /// in the contract for that cycle.
+    #[test]
+    fn test_payout_drains_contract_balance_when_fully_funded() {
+        let f = setup_fixture(3);
+        for m in f.members.iter() { f.client.join(m); }
+
+        f.env.ledger().with_mut(|l| l.timestamp = f.interval + 1);
+        f.client.payout();
+
+        let contract_balance = f.token.balance(&f.client.address);
+        assert_eq!(
+            contract_balance, 0,
+            "contract should hold no residual funds after a fully-funded cycle payout"
+        );
+    }
+
+    // ─── Upgrade tests ────────────────────────────────────────────────────────
 
     /// upgrade: admin can upgrade the contract WASM and event is emitted
     #[test]
@@ -356,6 +450,8 @@ let (cycle, max, _, completed, _) = client.get_state();
         let f = setup_fixture(2);
         let new_wasm_hash = BytesN::from_array(&f.env, &[1u8; 32]);
 
+        f.client.propose_upgrade(&new_wasm_hash);
+        f.env.ledger().with_mut(|l| l.timestamp += 172_800);
         f.client.upgrade(&new_wasm_hash);
 
         let upgraded_sym = soroban_sdk::Symbol::new(&f.env, "upgraded");
@@ -405,6 +501,63 @@ let (cycle, max, _, completed, _) = client.get_state();
         f.client.upgrade(&new_wasm_hash);
     }
 
+    /// upgrade governance (#55): upgrade() rejects a call with no prior
+    /// propose_upgrade().
+    #[test]
+    #[should_panic(expected = "no pending upgrade proposed")]
+    fn test_upgrade_without_proposal_panics() {
+        use soroban_sdk::BytesN;
+
+        let f = setup_fixture(2);
+        let new_wasm_hash = BytesN::from_array(&f.env, &[4u8; 32]);
+        f.client.upgrade(&new_wasm_hash);
+    }
+
+    /// upgrade governance (#55): upgrade() rejects execution before the
+    /// timelock set by propose_upgrade() has elapsed.
+    #[test]
+    #[should_panic(expected = "upgrade timelock has not elapsed")]
+    fn test_upgrade_before_timelock_panics() {
+        use soroban_sdk::BytesN;
+
+        let f = setup_fixture(2);
+        let new_wasm_hash = BytesN::from_array(&f.env, &[5u8; 32]);
+        f.client.propose_upgrade(&new_wasm_hash);
+        // Timelock is 48h; advance by only 1 hour.
+        f.env.ledger().with_mut(|l| l.timestamp += 3_600);
+        f.client.upgrade(&new_wasm_hash);
+    }
+
+    /// upgrade governance (#55): upgrade() rejects a hash that does not
+    /// match the pending proposal.
+    #[test]
+    #[should_panic(expected = "does not match the pending upgrade proposal")]
+    fn test_upgrade_hash_mismatch_panics() {
+        use soroban_sdk::BytesN;
+
+        let f = setup_fixture(2);
+        let proposed_hash = BytesN::from_array(&f.env, &[6u8; 32]);
+        let other_hash = BytesN::from_array(&f.env, &[7u8; 32]);
+        f.client.propose_upgrade(&proposed_hash);
+        f.env.ledger().with_mut(|l| l.timestamp += 172_800);
+        f.client.upgrade(&other_hash);
+    }
+
+    /// upgrade governance (#55): cancel_upgrade() clears the pending
+    /// proposal so a subsequent upgrade() call is rejected again.
+    #[test]
+    #[should_panic(expected = "no pending upgrade proposed")]
+    fn test_cancel_upgrade_clears_proposal() {
+        use soroban_sdk::BytesN;
+
+        let f = setup_fixture(2);
+        let new_wasm_hash = BytesN::from_array(&f.env, &[8u8; 32]);
+        f.client.propose_upgrade(&new_wasm_hash);
+        f.client.cancel_upgrade();
+        f.env.ledger().with_mut(|l| l.timestamp += 172_800);
+        f.client.upgrade(&new_wasm_hash);
+    }
+
     /// upgrade: state is preserved after upgrade call
     #[test]
     fn test_upgrade_preserves_state() {
@@ -418,6 +571,8 @@ let (cycle, max, _, completed, _) = client.get_state();
         let (cycle_before, max_before, _, completed_before, _) = f.client.get_state();
 
         let new_wasm_hash = BytesN::from_array(&f.env, &[3u8; 32]);
+        f.client.propose_upgrade(&new_wasm_hash);
+        f.env.ledger().with_mut(|l| l.timestamp += 172_800);
         f.client.upgrade(&new_wasm_hash);
 
         let (cycle_after, max_after, _, completed_after, _) = f.client.get_state();
@@ -721,7 +876,7 @@ let (cycle, max, _, completed, _) = client.get_state();
         let token_id = env.register_stellar_asset_contract(admin.clone());
         let contract_id = env.register_contract(None, AjoContract);
         let client = AjoContractClient::new(&env, &contract_id);
-        client.initialize(&admin, &token_id, &0, &3, &86_400);
+        client.initialize(&admin, &token_id, &admin, &0, &3, &86_400);
     }
 
     // ─── payout: circle not started ──────────────────────────────────────────

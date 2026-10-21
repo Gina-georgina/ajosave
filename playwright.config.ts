@@ -15,8 +15,18 @@ export default defineConfig({
     // Existing functional E2E tests
     {
       name: "chromium",
-      testMatch: /e2e\/(?!visual\/).*\.spec\.ts/,
+      testMatch: /e2e\/(?!visual\/|accessibility\/).*\.spec\.ts/,
       use: { ...devices["Desktop Chrome"] },
+    },
+    // Accessibility tests — issue #91
+    {
+      name: "accessibility",
+      testMatch: /e2e\/accessibility\/.*\.spec\.ts/,
+      use: {
+        ...devices["Desktop Chrome"],
+        // Disable animations for deterministic axe results
+        launchOptions: { args: ["--force-prefers-reduced-motion"] },
+      },
     },
     // Visual regression tests — desktop viewport
     {
@@ -44,6 +54,23 @@ export default defineConfig({
       testMatch: /e2e\/visual\/.*\.visual\.spec\.ts/,
       use: {
         ...devices["Pixel 5"],
+        // Disable animations so screenshots are deterministic
+        launchOptions: { args: ["--force-prefers-reduced-motion"] },
+      },
+      expect: {
+        toHaveScreenshot: {
+          maxDiffPixelRatio: 0.001,
+          snapshotPathTemplate:
+            "{testDir}/visual/__snapshots__/{projectName}/{testFilePath}/{arg}{ext}",
+        },
+      },
+    },
+    // Visual regression tests — tablet viewport (iPad Mini)
+    {
+      name: "visual-tablet",
+      testMatch: /e2e\/visual\/.*\.visual\.spec\.ts/,
+      use: {
+        ...devices["iPad Mini"],
         // Disable animations so screenshots are deterministic
         launchOptions: { args: ["--force-prefers-reduced-motion"] },
       },

@@ -3,7 +3,7 @@ import { Inter } from "next/font/google";
 import "@/styles/globals.css";
 import "@/styles/components.css";
 import { Navbar } from "@/components/layout/Navbar";
-import { BottomTabBar } from "@/components/layout/BottomTabBar";
+import { ToastProvider } from "@/components/ui/Toast";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
@@ -38,14 +38,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={inter.variable}>
       <body>
-        {/* Top navbar — hidden on mobile (≤ 767 px) via CSS when bottom tab bar is present */}
-        <Navbar />
-        {/* Add bottom padding on mobile to prevent content from being hidden behind the tab bar */}
-        <main style={{ paddingBottom: "var(--bottom-tab-bar-height, 0)" }}>
-          {children}
-        </main>
-        {/* Fixed bottom tab bar — visible on mobile only */}
-        <BottomTabBar />
+        <ToastProvider>
+          <Navbar />
+          <main>{children}</main>
+        </ToastProvider>
       </body>
     </html>
   );
