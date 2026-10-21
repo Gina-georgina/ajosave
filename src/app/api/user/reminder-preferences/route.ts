@@ -23,7 +23,7 @@ export const GET = withErrorHandler(
   })
 );
 
-export const PUT = withErrorHandler(
+const updatePreferences = withErrorHandler(
   withAuth(async (req, ctx) => {
     const parsed = schema.safeParse(await req.json());
     if (!parsed.success) {
@@ -37,3 +37,6 @@ export const PUT = withErrorHandler(
     }
   })
 );
+
+export const PUT = updatePreferences;
+export const PATCH = updatePreferences;

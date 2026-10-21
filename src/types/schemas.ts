@@ -16,6 +16,7 @@ export const createCircleSchema = z.object({
   payoutMethod: z.enum(["fixed", "randomized"]).default("fixed"),
   yieldStrategy: z.enum(["none", "blend"]).default("none"),
   penaltyPercent: z.number().int().min(0).max(100).default(10),
+  templateId: z.string().max(60).optional(),
 });
 
 export const joinCircleSchema = z.object({

@@ -135,7 +135,7 @@ Start with `lib.rs`. Each public function is marked `#[contractimpl]`.
 |---|---|---|
 | Instance | Admin, Token, ContributionAmount, MaxMembers, CycleIntervalSecs, Members, PayoutOrder, CurrentCycle, NextPayoutTime, Completed, Paused, PayoutLock, MultisigConfig | Contract lifetime |
 | Temporary | `Contributions(Address, u32)` | Auto-expires ~3.5 days; TTL extended per cycle |
-| Persistent | MemberReputation, TotalCirclesCompleted, OnTimeContributions, TotalContributions, MissedContributions | 30 days (survives upgrades) |
+| Persistent | MemberStats (packed per-member: reputation, circles, on-time/total/missed counts, suspended; replaces the v1 per-member keys) | 30 days (survives upgrades) |
 
 **Auditor note:** temporary storage TTL extension logic is in `contribute`.
 Verify the TTL buffer is sufficient for the longest allowed cycle interval

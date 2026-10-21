@@ -85,15 +85,19 @@ export const POST = withRateLimit(
         );
       } catch (err) {
         if (err instanceof ReferralFraudError) {
-          // Map fraud reasons to informative but non-leaking error messages
+          // Map fraud reasons to HTTP status codes (Issue #227)
+          // SELF_REFERRAL → 422 Unprocessable Entity (was 400, changed per acceptance criteria)
           const statusMap: Record<string, number> = {
-            SELF_REFERRAL: 400,
+            SELF_REFERRAL: 422,
             ALREADY_REFERRED: 409,
             VELOCITY_LIMIT: 429,
             IP_LIMIT: 429,
             INVALID_CODE: 404,
+            CODE_DEACTIVATED: 422,
+            USE_LIMIT_EXCEEDED: 422,
+            PHONE_ALREADY_REGISTERED: 422,
           };
-          const status = statusMap[err.reason] ?? 400;
+          const status = statusMap[err.reason] ?? 422;
           return NextResponse.json<ApiResponse<never>>(
             { success: false, error: err.message, code: err.reason },
             { status }

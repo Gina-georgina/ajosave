@@ -1,5 +1,6 @@
 import { sendUsdcPayment } from "@/lib/stellar";
 import { getCircleById, getMembersByCircle, updateCircleStatus } from "./circle.service";
+import { queueCertificatesForCircle } from "./certificate.service";
 import { withPayoutLock } from "./payout-lock";
 import { transaction, query } from "@/lib/db";
 import type { Payout } from "@/types";
@@ -184,6 +185,8 @@ export async function processCyclePayout(
     // ── 6. Advance circle status if all members have been paid ──────────────
     if (cycleNumber >= circleMembers.length) {
       await updateCircleStatus(circleId, "completed");
+      // Queue on-chain completion certificates for every member (#241).
+      await queueCertificatesForCircle(circleId);
     }
 
     return payout;

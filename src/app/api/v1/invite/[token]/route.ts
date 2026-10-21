@@ -19,6 +19,7 @@ import { authOptions } from "@/lib/auth";
 import { validateInviteToken, consumeInviteToken } from "@/lib/tokens";
 import { getCircleById, joinCircle } from "@/server/services/circle.service";
 import { withErrorHandler, withRateLimit } from "@/server/middleware";
+import { notifyInviteRedeemed } from "@/server/services/notification.service";
 import type { ApiResponse, Circle } from "@/types";
 
 export interface InvitePreviewResponse {
@@ -89,17 +90,36 @@ export const POST = withRateLimit(
     const { params } = ctx as { params: { token: string } };
 
     // Atomically consume the token
-    const tokenRecord = await consumeInviteToken(params.token, userId);
+    const result = await consumeInviteToken(params.token, userId);
 
-    if (!tokenRecord) {
+    if (!result.ok) {
+      // Expired → 410 Gone; already redeemed → 409 Conflict (issue #239)
+      const expired = result.reason === "expired";
       return NextResponse.json<ApiResponse<never>>(
         {
           success: false,
-          error: "Invite link is invalid, expired, or has already been used",
-          code: "INVITE_INVALID",
+          error: expired
+            ? "This invite link has expired"
+            : "This invite link has already been used",
+          code: expired ? "INVITE_EXPIRED" : "INVITE_ALREADY_USED",
         },
-        { status: 410 }
+        { status: expired ? 410 : 409 }
       );
+    }
+
+    const tokenRecord = result.record;
+
+    // Best-effort: let the invite issuer know their link was redeemed.
+    // A notification failure must not fail the join.
+    try {
+      const circle = await getCircleById(tokenRecord.circleId);
+      await notifyInviteRedeemed(
+        tokenRecord.createdBy,
+        circle?.name ?? "a circle",
+        userId
+      );
+    } catch (err) {
+      console.error("[invite] failed to notify issuer of redemption:", err);
     }
 
     // Join the circle using the consumed token

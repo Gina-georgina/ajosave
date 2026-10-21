@@ -1,0 +1,111 @@
+/* FaqSearch.module.css — Issue #216 */
+
+.searchWrapper {
+  margin-bottom: 2rem;
+}
+
+.searchLabel {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  margin-bottom: 0.5rem;
+}
+
+.searchInput {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  font-size: 1rem;
+  border: 2px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.searchInput:focus {
+  border-color: var(--color-brand-primary);
+  box-shadow: 0 0 0 3px rgba(var(--color-brand-primary-rgb, 79 70 229), 0.2);
+}
+
+.resultCount {
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+  margin-top: 0.5rem;
+}
+
+.emptyState {
+  padding: 2rem;
+  text-align: center;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-surface);
+  border-radius: 8px;
+  border: 1px dashed var(--color-border);
+  margin-bottom: 2rem;
+}
+
+/* Keyword highlight */
+.highlight {
+  background-color: rgba(250, 204, 21, 0.4); /* yellow-300 ~40 % */
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* Sections & items – mirrors page.module.css so the unstyled version looks identical */
+.section {
+  margin-bottom: 3rem;
+}
+
+/* When aria-hidden is set, visually collapse the element but keep it in the DOM */
+.section[aria-hidden="true"],
+.faqItem[aria-hidden="true"] {
+  display: none;
+}
+
+.sectionTitle {
+  font-size: 1.75rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: 1.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 2px solid var(--color-border);
+}
+
+.faqItem {
+  margin-bottom: 2rem;
+}
+
+.question {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: 0.75rem;
+}
+
+.answer {
+  font-size: 1rem;
+  line-height: 1.7;
+  color: var(--color-text-secondary);
+}
+
+.link {
+  color: var(--color-brand-primary);
+  text-decoration: underline;
+  font-weight: 500;
+}
+
+.link:hover {
+  color: var(--color-brand-primary-hover);
+}
+
+@media (max-width: 768px) {
+  .sectionTitle {
+    font-size: 1.5rem;
+  }
+
+  .question {
+    font-size: 1.125rem;
+  }
+}

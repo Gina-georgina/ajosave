@@ -87,7 +87,18 @@
   color: var(--color-text-muted);
 }
 .input:focus {
-  outline: none;
+  /* Keep border change for sighted mouse users */
+  border-color: var(--color-brand-primary);
+}
+
+/* WCAG 2.4.7 — ensure keyboard users always see a visible focus ring.
+   Using :focus-visible so mouse clicks do not show the ring unnecessarily.
+   We must NOT set outline: none here — the global :focus-visible rule
+   provides the ring; we only supplement with the border change above. */
+.input:focus-visible {
+  outline: 2px solid var(--color-brand-primary);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(var(--color-brand-primary-rgb, 15 122 74), 0.25);
   border-color: var(--color-brand-primary);
 }
 .input--error {

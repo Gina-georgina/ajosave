@@ -86,11 +86,17 @@ export async function handleKycWebhook(
   // ResultCode "1012" = Approved; anything else is treated as rejected
   const status: KycStatus = payload.ResultCode === "1012" ? "approved" : "rejected";
 
+  // Derive tier from status (Issue #223):
+  // approved → full, rejected → unverified, pending is set on initiation
+  const tier = status === "approved" ? "full" : "unverified";
+
   await query(
     `UPDATE users
-     SET kyc_status = $1, kyc_verified_at = CASE WHEN $1 = 'approved' THEN NOW() ELSE NULL END
-     WHERE id = $2`,
-    [status, userId]
+     SET kyc_status = $1,
+         kyc_tier = $2,
+         kyc_verified_at = CASE WHEN $1 = 'approved' THEN NOW() ELSE NULL END
+     WHERE id = $3`,
+    [status, tier, userId]
   );
 
   return { userId, status };

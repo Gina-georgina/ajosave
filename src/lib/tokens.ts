@@ -18,8 +18,18 @@ import { serverConfig } from "@/server/config";
 
 const SECRET = new TextEncoder().encode(serverConfig.authSecret);
 
-// Default token lifetime: 48 hours
-const DEFAULT_EXPIRY_HOURS = 48;
+// Default token lifetime, overridable via INVITE_TOKEN_EXPIRY_HOURS (issue #239)
+const DEFAULT_EXPIRY_HOURS = Number(process.env.INVITE_TOKEN_EXPIRY_HOURS) > 0
+  ? Number(process.env.INVITE_TOKEN_EXPIRY_HOURS)
+  : 48;
+
+/** Why an invite token could not be consumed. */
+export type InviteTokenFailure = "not_found" | "expired" | "already_used";
+
+/** Result of consuming an invite token, distinguishing each failure reason. */
+export type ConsumeInviteTokenResult =
+  | { ok: true; record: InviteTokenRecord }
+  | { ok: false; reason: InviteTokenFailure };
 
 // ─── DB-backed invite tokens ──────────────────────────────────────────────────
 
@@ -113,6 +123,9 @@ export async function validateInviteToken(token: string): Promise<InviteTokenRec
  * use constraints and marks the token as consumed.  Returns the token record on
  * success, or null if the token was invalid, already used, or expired.
  *
+ * Returns a discriminated result so callers can tell an expired token (410)
+ * apart from one that was already redeemed (409).
+ *
  * This is the function to call when a user actually accepts an invite link.
  *
  * @param token   Raw token string from the invite URL
@@ -121,11 +134,11 @@ export async function validateInviteToken(token: string): Promise<InviteTokenRec
 export async function consumeInviteToken(
   token: string,
   usedBy: string
-): Promise<InviteTokenRecord | null> {
-  if (!token || typeof token !== "string") return null;
+): Promise<ConsumeInviteTokenResult> {
+  if (!token || typeof token !== "string") return { ok: false, reason: "not_found" };
 
   try {
-    return await transaction(async (q) => {
+    const record = await transaction(async (q) => {
       // Lock the row to prevent concurrent consumption
       const { rows } = await q<{
         token: string;
@@ -145,11 +158,11 @@ export async function consumeInviteToken(
       const row = rows[0];
       if (!row) return null;
 
-      // Already used
-      if (row.used_at !== null) return null;
+      // Already used — single-use enforced here
+      if (row.used_at !== null) return "already_used" as const;
 
       // Expired
-      if (new Date() > new Date(row.expires_at)) return null;
+      if (new Date() > new Date(row.expires_at)) return "expired" as const;
 
       const now = new Date();
 
@@ -170,9 +183,15 @@ export async function consumeInviteToken(
         usedBy,
       };
     });
+
+    if (record === null) return { ok: false, reason: "not_found" };
+    if (record === "expired" || record === "already_used") {
+      return { ok: false, reason: record };
+    }
+    return { ok: true, record };
   } catch (err) {
     console.error("[tokens] consumeInviteToken DB error:", err);
-    return null;
+    return { ok: false, reason: "not_found" };
   }
 }
 
