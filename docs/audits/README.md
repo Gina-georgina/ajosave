@@ -17,6 +17,7 @@ Add an entry whenever `contracts/*/src` changes (CI requires this file or the au
 
 | Date | PR | Change | Re-audit needed? |
 |---|---|---|---|
+| 2026-10-21 | Issue #247 | Return a typed pause error from join, contribute and payout; emit CircleResumed on unpause. | Yes |
 | | | | |
 
 ## Findings

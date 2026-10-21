@@ -28,6 +28,7 @@ function's doc comment here alongside the code change.
 | `upgraded` | `(new_wasm_hash: BytesN<32>)` | `upgrade` |
 | `paused` | `()` (no data) | `pause` |
 | `unpaused` | `()` (no data) | `unpause` |
+| `CircleResumed` | `()` (no data) | `unpause` |
 | `admin_proposed` | `(admin: Address, new_admin: Address)` | `propose_admin` |
 | `admin_transferred` | `(old_admin: Address, new_admin: Address)` | `accept_admin` |
 

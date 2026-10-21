@@ -68,6 +68,8 @@ pub enum Error {
     /// (admin) address stored at initialisation.  This prevents a malicious
     /// actor from substituting a look-alike token contract.
     InvalidTokenIssuer = 1,
+    /// State-changing circle operations are disabled while the admin pause is active.
+    CirclePaused = 2,
 }
 
 // ─── Storage keys ─────────────────────────────────────────────────────────────
@@ -245,8 +247,11 @@ impl AjoContract {
     // ── Member operations ─────────────────────────────────────────────────────
 
     /// Join the circle. Transfers the first contribution into the contract.
-    pub fn join(env: Env, member: Address) {
+    pub fn join(env: Env, member: Address) -> Result<(), Error> {
         Self::extend_instance_ttl(&env);
+        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+            return Err(Error::CirclePaused);
+        }
         member.require_auth();
 
         let max_members: u32 = env.storage().instance().get(&DataKey::MaxMembers).expect("not initialized");
@@ -287,21 +292,22 @@ impl AjoContract {
             (Symbol::new(&env, "member_joined"),),
             (member, amount),
         );
+        Ok(())
     }
 
     /// Contribute for the current cycle.
     ///
     /// The caller must pass the exact `ContributionAmount`; the contract
     /// rejects any other value to prevent under- and over-contributions.
-    pub fn contribute(env: Env, member: Address, amount: i128) {
+    pub fn contribute(env: Env, member: Address, amount: i128) -> Result<(), Error> {
         Self::extend_instance_ttl(&env);
-        member.require_auth();
 
         // Respect emergency pause
         let paused: bool = env.storage().instance().get(&DataKey::Paused).unwrap_or(false);
         if paused {
-            panic!("contract is paused");
+            return Err(Error::CirclePaused);
         }
+        member.require_auth();
 
         let required: i128 = env.storage().instance().get(&DataKey::ContributionAmount).expect("not initialized");
         if amount != required {
@@ -367,6 +373,7 @@ impl AjoContract {
             (Symbol::new(&env, "contribution_made"),),
             (member, amount, current_cycle),
         );
+        Ok(())
     }
 
     // ── Admin operations ──────────────────────────────────────────────────────
@@ -410,13 +417,13 @@ impl AjoContract {
     /// A `PayoutLock` flag is set at the start and cleared at the end.
     /// The contract follows checks-effects-interactions: all state mutations
     /// occur before the external token transfer.
-    pub fn payout(env: Env) {
+    pub fn payout(env: Env) -> Result<(), Error> {
         Self::extend_instance_ttl(&env);
 
         // Respect emergency pause
         let paused: bool = env.storage().instance().get(&DataKey::Paused).unwrap_or(false);
         if paused {
-            panic!("contract is paused");
+            return Err(Error::CirclePaused);
         }
 
         // ─── Reentrancy guard ─────────────────────────────────────────────────
@@ -513,6 +520,7 @@ impl AjoContract {
         if current_cycle >= max_members {
             env.events().publish((Symbol::new(&env, "circle_completed"),), ());
         }
+        Ok(())
     }
 
     /// Internal: Calculate and update reputation score for a member
@@ -766,6 +774,7 @@ impl AjoContract {
         let admin: Address = env.storage().instance().get(&DataKey::Admin).expect("not initialized");
         admin.require_auth();
         env.storage().instance().set(&DataKey::Paused, &false);
+        env.events().publish((Symbol::new(&env, "CircleResumed"),), ());
         env.events().publish((Symbol::new(&env, "unpaused"),), ());
     }
 
