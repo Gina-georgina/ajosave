@@ -17,7 +17,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, token, vec, Address, BytesN, Env, Symbol, Vec,
+    contract, contractimpl, contracterror, contracttype, token, vec, Address, BytesN, Env, Symbol,
+    Vec,
 };
 
 // ─── Schema version ───────────────────────────────────────────────────────────
@@ -53,6 +54,22 @@ pub const MIN_CYCLE_INTERVAL_SECS: u64 = 1;
 /// far below `u64::MAX` so payout scheduling can never overflow.
 pub const MAX_CYCLE_INTERVAL_SECS: u64 = 365 * 24 * 60 * 60;
 
+// ─── Errors ───────────────────────────────────────────────────────────────────
+
+/// Typed contract errors.
+///
+/// Using `contracterror` lets callers distinguish error conditions via the
+/// Soroban RPC status code rather than parsing panic strings.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum Error {
+    /// The token used in `contribute` or `join` does not match the issuer
+    /// (admin) address stored at initialisation.  This prevents a malicious
+    /// actor from substituting a look-alike token contract.
+    InvalidTokenIssuer = 1,
+}
+
 // ─── Storage keys ─────────────────────────────────────────────────────────────
 
 /// Storage key classification for optimization:
@@ -69,6 +86,8 @@ pub enum DataKey {
     PendingUpgradeHash,
     PendingUpgradeTime,
     Token,
+    /// Expected issuer (admin) of the USDC token contract stored at init (issue #245).
+    ExpectedIssuer,
     ContributionAmount,
     MaxMembers,
     CycleIntervalSecs,
@@ -148,6 +167,8 @@ impl AjoContract {
     ///
     /// * `admin`               – address that controls admin operations
     /// * `token`               – USDC token contract address
+    /// * `expected_issuer`     – expected issuer (admin) of the USDC token contract;
+    ///                           used by `contribute` to reject look-alike tokens (issue #245)
     /// * `contribution_amount` – USDC amount per member per cycle (in stroops)
     /// * `max_members`         – total number of members (= total cycles)
     /// * `cycle_interval_secs` – seconds between payouts (e.g. 2592000 = 30 days)
@@ -155,6 +176,7 @@ impl AjoContract {
         env: Env,
         admin: Address,
         token: Address,
+        expected_issuer: Address,
         contribution_amount: i128,
         max_members: u32,
         cycle_interval_secs: u64,
@@ -204,6 +226,7 @@ impl AjoContract {
 
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Token, &token);
+        env.storage().instance().set(&DataKey::ExpectedIssuer, &expected_issuer);
         env.storage().instance().set(&DataKey::ContributionAmount, &contribution_amount);
         env.storage().instance().set(&DataKey::MaxMembers, &max_members);
         env.storage().instance().set(&DataKey::CycleIntervalSecs, &cycle_interval_secs);
@@ -305,6 +328,21 @@ impl AjoContract {
         }
 
         let token: Address = env.storage().instance().get(&DataKey::Token).expect("not initialized");
+
+        // ── Issue #245: validate token issuer ────────────────────────────────
+        // Compare the token contract's current admin (issuer) against the
+        // expected_issuer stored at initialisation.  A look-alike token deployed
+        // by a malicious actor will have a different admin and will be rejected.
+        let expected_issuer: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::ExpectedIssuer)
+            .expect("not initialized");
+        let actual_issuer = token::StellarAssetClient::new(&env, &token).admin();
+        if actual_issuer != expected_issuer {
+            panic!("InvalidTokenIssuer");
+        }
+
         let token_client = token::Client::new(&env, &token);
         token_client.transfer(&member, &env.current_contract_address(), &amount);
 
@@ -1023,7 +1061,8 @@ mod tests {
         let contract_id = env.register_contract(None, AjoContract);
         let client = AjoContractClient::new(env, &contract_id);
 
-        client.initialize(&admin, &token_id, &100_000_000, &3, &86400);
+        // admin is both the circle admin and the token issuer in tests
+        client.initialize(&admin, &token_id, &admin, &100_000_000, &3, &86400);
 
         (admin, members, token_id, token, client)
     }

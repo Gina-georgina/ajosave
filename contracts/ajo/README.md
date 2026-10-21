@@ -63,6 +63,7 @@ State transitions are enforced by the contract — there is no admin escape hatc
 |----------------------|-----------|--------------------------|----------------------------------------------------------|
 | `admin`              | `Address` | Must sign the call       | Platform address authorized to trigger payouts           |
 | `token`              | `Address` | —                        | USDC token contract address on the network               |
+| `expected_issuer`    | `Address` | —                        | Expected issuer (admin) of the USDC token contract. Stored at init and verified on every `contribute` call to prevent look-alike token substitution (issue #245). |
 | `contribution_amount`| `i128`    | > 0                      | Per-member per-cycle amount in stroops (1 USDC = 10⁷)   |
 | `max_members`        | `u32`     | 2 – 20                   | Total members = total cycles                             |
 | `cycle_interval_secs`| `u64`     | —                        | Seconds between payouts (e.g. `2592000` = 30 days)       |
@@ -98,6 +99,10 @@ Admin-only, before the circle starts. `order` must be a permutation of `0..max_m
 ### `contribute(env, member)`
 
 - Requires `member` auth.
+- **Validates token issuer** (issue #245): calls `StellarAssetClient::admin()` on the stored
+  token contract and compares against the `expected_issuer` recorded at initialisation.
+  Panics with `"InvalidTokenIssuer"` if they differ, preventing a malicious actor from
+  substituting a look-alike USDC contract.
 - Transfers `contribution_amount` from `member` to the contract for the current cycle.
 - Panics if: circle not started, not a member, or already contributed this cycle.
 
@@ -216,6 +221,9 @@ const events = await sorobanRpc.getEvents({
 - Payout after completion is blocked.
 - Only the admin can trigger payouts and upgrades.
 - Member count is capped at 20 to bound gas costs.
+- **Token issuer is validated on every `contribute`** (issue #245): the contract records the
+  expected USDC issuer at `initialize` and rejects any `contribute` call where the stored
+  token's current admin does not match, preventing look-alike token attacks.
 
 ### What the contract does NOT enforce
 
@@ -257,6 +265,7 @@ stellar contract invoke \
   -- initialize \
   --admin <ADMIN_ADDRESS> \
   --token <USDC_CONTRACT_ADDRESS> \
+  --expected_issuer <USDC_ISSUER_ADDRESS> \
   --contribution_amount 10000000 \
   --max_members 5 \
   --cycle_interval_secs 2592000
