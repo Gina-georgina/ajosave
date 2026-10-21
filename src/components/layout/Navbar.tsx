@@ -59,13 +59,18 @@ export function Navbar() {
         {/* Desktop links */}
         <ul className={styles.links} role="list" aria-label="Desktop navigation links">
           <li>
-            <Link href="/circles" className={styles.link}>
+            <Link href="/circles" className={styles.link} data-onboarding="browse-circles">
               Browse Circles
             </Link>
           </li>
           <li>
             <Link href="/dashboard" className={styles.link}>
               Dashboard
+            </Link>
+          </li>
+          <li>
+            <Link href="/profile" className={styles.link} data-onboarding="wallet">
+              My Wallet
             </Link>
           </li>
           <li>
