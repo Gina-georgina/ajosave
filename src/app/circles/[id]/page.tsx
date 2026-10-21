@@ -6,6 +6,7 @@ import { getPayoutHistoryByCircle } from "@/server/services/payout.service";
 import { getContributionsByCircle } from "@/server/services/contribution.service";
 import { CircleStatusBadge } from "@/components/ui/CircleStatusBadge";
 import { CopyButton } from "@/components/ui/CopyButton";
+import { CircleProgressBar } from "@/components/circle/CircleProgressBar";
 import { MemberPayoutList } from "@/components/circle/MemberPayoutList";
 import { CircleActions } from "@/components/circle/CircleActions";
 import { PayoutCountdown } from "@/components/circle/PayoutCountdown";
@@ -151,6 +152,17 @@ export default async function CircleDetailPage({ params }: Props) {
           <div className="card">
             <h2 className={styles.sectionTitle}>Circle Details</h2>
             
+            {/* Rotation progress visualiser (issue #197) */}
+            {circle.status !== "open" && (
+              <div style={{ marginBottom: "var(--space-6)" }}>
+                <CircleProgressBar
+                  currentCycle={circle.currentCycle}
+                  totalCycles={circle.maxMembers}
+                  status={circle.status}
+                />
+              </div>
+            )}
+
             {circle.nextPayoutAt && circle.status === "active" && (
               <div style={{ marginBottom: "var(--space-6)" }}>
                 <PayoutCountdown nextPayoutAt={circle.nextPayoutAt} />
