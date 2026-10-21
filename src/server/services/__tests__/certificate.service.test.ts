@@ -85,6 +85,7 @@ describe("getCertificatesByUser", () => {
     mockQuery.mockResolvedValue({
       rows: [{
         circle_id: "cid1", circle_name: "My Circle", member_stellar_key: "GMEMBER",
+        token_id: "a".repeat(64),
         cycles_completed: 4, total_saved_usdc: "400.0000000", tx_hash: "TXABC", issued_at: new Date("2025-01-01"),
       }],
       rowCount: 1,
@@ -94,7 +95,9 @@ describe("getCertificatesByUser", () => {
 
     expect(result).toEqual([{
       circleId: "cid1", circleName: "My Circle", memberAddress: "GMEMBER",
+      tokenId: "a".repeat(64),
       cyclesCompleted: 4, totalSavedUsdc: "400.0000000", txHash: "TXABC",
+      verificationUrl: "https://stellar.expert/explorer/testnet/tx/TXABC",
       issuedAt: new Date("2025-01-01"),
     }]);
     expect(mockQuery).toHaveBeenCalledWith(
