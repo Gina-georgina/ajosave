@@ -136,7 +136,7 @@ The contract uses three storage types to optimize ledger fees:
 |------|------|----------|---------|
 | Instance | Admin, Token, ContributionAmount, MaxMembers, CycleIntervalSecs, Members, PayoutOrder, CurrentCycle, NextPayoutTime, Completed, Paused, PayoutLock | Contract lifetime | Core circle configuration |
 | Temporary | Contributions(Address, u32) | Auto-expire (~3.5 days) | Per-cycle contribution tracking |
-| Persistent | MemberReputation, TotalCirclesCompleted, OnTimeContributions, TotalContributions | 30 days | Member reputation (survives upgrades) |
+| Persistent | MemberStats (packed: reputation, circles, on-time/total/missed counts, suspended) | 30 days | Per-member state (survives upgrades) |
 
 ### Optimization Benefits
 
@@ -331,7 +331,7 @@ STELLAR_AJO_CONTRACT_ID=CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC
 ## Missed Contribution Policy
 
 At each `payout`, members who did not contribute for the cycle get a
-`contribution_missed` event and their lifetime `MissedContributions` counter
+`contribution_missed` event and their lifetime missed counter (`MemberStats.missed_contributions`)
 increments (it also counts against on-time reputation). Once a member reaches
 the admin-configured threshold (`set_missed_policy`, default `1`, range
 `1..=max_members`) they are suspended (`member_suspended` event) and
