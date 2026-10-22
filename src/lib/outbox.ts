@@ -41,8 +41,9 @@ type QueryFn = <T extends QueryResultRow = QueryResultRow>(
   params?: unknown[]
 ) => Promise<QueryResult<T>>;
 
-const DEFAULT_MAX_ATTEMPTS = 5;
+const DEFAULT_MAX_ATTEMPTS = 10;
 const DEFAULT_LIMIT = 100;
+const BACKOFF_CAP_SECONDS = 3600; // 2^attempt seconds, capped at 1 hour
 
 /**
  * Insert an outbox event, optionally within an existing transaction.
@@ -140,21 +141,86 @@ export async function markEventFailed(
 }
 
 /**
- * Reschedule a failed event for a future retry.
+ * Compute exponential backoff delay in milliseconds.
+ *
+ * Delay = min(2^attempt, BACKOFF_CAP_SECONDS) seconds.
+ * Example: attempt 1 → 2s, 2 → 4s, 3 → 8s … capped at 3600s.
+ *
+ * @param attempt - Current attempt count (1-based)
+ */
+export function computeBackoffMs(attempt: number): number {
+  const seconds = Math.min(Math.pow(2, attempt), BACKOFF_CAP_SECONDS);
+  return seconds * 1_000;
+}
+
+/**
+ * Reschedule a failed event for a future retry using exponential backoff.
  *
  * Resets the status to `'pending'` and pushes `scheduled_at` forward by
- * `delayMs` milliseconds. This is typically called after a transient
- * failure, before the `maxAttempts` ceiling is reached.
+ * `2^attempt` seconds (capped at 3600s). Pass `delayMs` to override.
  *
  * @param id      - UUID of the outbox event
- * @param delayMs - How far in the future to reschedule (default: 60 000 ms)
+ * @param attempt - Current attempt number (used to compute backoff)
+ * @param delayMs - Optional override; if omitted, computed from `attempt`
  */
-export async function requeueEvent(id: string, delayMs = 60_000): Promise<void> {
+export async function requeueEvent(id: string, attempt: number, delayMs?: number): Promise<void> {
+  const delay = delayMs ?? computeBackoffMs(attempt);
   await defaultQuery(
     `UPDATE outbox_events
         SET status       = 'pending',
             scheduled_at = NOW() + ($2 * INTERVAL '1 millisecond')
       WHERE id = $1`,
-    [id, delayMs]
+    [id, delay]
   );
+}
+
+/**
+ * List dead-letter events for admin review.
+ *
+ * @param limit  - Max rows (default: 50)
+ * @param offset - Pagination offset (default: 0)
+ */
+export async function getDeadLetterEvents(
+  limit = 50,
+  offset = 0
+): Promise<OutboxEvent[]> {
+  const { rows } = await defaultQuery<OutboxEvent>(
+    `SELECT *
+       FROM outbox_events
+      WHERE status = 'dead'
+      ORDER BY created_at DESC
+      LIMIT $1 OFFSET $2`,
+    [limit, offset]
+  );
+  return rows;
+}
+
+/**
+ * Replay a dead-letter event by resetting it to `'pending'` with attempts
+ * cleared so it gets a fresh backoff sequence.
+ *
+ * @param id - UUID of the outbox event to replay
+ */
+export async function replayDeadLetterEvent(id: string): Promise<OutboxEvent | null> {
+  const { rows } = await defaultQuery<OutboxEvent>(
+    `UPDATE outbox_events
+        SET status       = 'pending',
+            attempts     = 0,
+            last_error   = NULL,
+            scheduled_at = NOW()
+      WHERE id = $1 AND status = 'dead'
+      RETURNING *`,
+    [id]
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * Count of events currently in dead-letter state (for metrics).
+ */
+export async function getDeadLetterCount(): Promise<number> {
+  const { rows } = await defaultQuery<{ count: string }>(
+    `SELECT COUNT(*)::text AS count FROM outbox_events WHERE status = 'dead'`
+  );
+  return parseInt(rows[0]?.count ?? "0", 10);
 }

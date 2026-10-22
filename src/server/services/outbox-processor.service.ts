@@ -22,8 +22,11 @@ import {
   getPendingEvents,
   markEventProcessed,
   markEventFailed,
+  requeueEvent,
+  getDeadLetterCount,
   type OutboxEvent,
 } from "@/lib/outbox";
+import { getRedis } from "@/lib/redis";
 import { notifyPayoutProcessed, notifyPayoutReminder, notifyContributionReminder, notifyMissedContribution } from "@/server/services/notification.service";
 import { mintCertificate } from "@/server/services/certificate.service";
 
@@ -142,14 +145,26 @@ async function dispatchEvent(event: OutboxEvent): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Main processor
+// Configuration
 // ---------------------------------------------------------------------------
 
 const BATCH_LIMIT = parseInt(process.env.OUTBOX_BATCH_LIMIT ?? "50", 10);
-const MAX_ATTEMPTS = parseInt(process.env.OUTBOX_MAX_ATTEMPTS ?? "5", 10);
+const MAX_ATTEMPTS = parseInt(process.env.OUTBOX_MAX_ATTEMPTS ?? "10", 10);
+
+/** Redis key used as a distributed lock so only one processor runs at a time. */
+const LOCK_KEY = "outbox:processor:lock";
+const LOCK_TTL_MS = 55_000; // 55 s — slightly less than a 1-minute cron interval
+
+// ---------------------------------------------------------------------------
+// Main processor
+// ---------------------------------------------------------------------------
 
 /**
  * Fetch and process a batch of pending outbox events.
+ *
+ * Acquires a Redis distributed lock before processing to prevent race
+ * conditions between multiple processor instances. Uses exponential backoff
+ * (2^attempt seconds, capped at 3600s) for failed events.
  *
  * Errors from individual event handlers are caught and recorded without
  * aborting the rest of the batch.
@@ -159,48 +174,75 @@ const MAX_ATTEMPTS = parseInt(process.env.OUTBOX_MAX_ATTEMPTS ?? "5", 10);
 export async function processOutboxEvents(): Promise<ProcessOutboxResult> {
   const result: ProcessOutboxResult = { processed: 0, succeeded: 0, failed: 0 };
 
-  const events = await getPendingEvents(BATCH_LIMIT);
-
-  if (events.length === 0) {
-    logger.debug("[outbox-processor] No pending events");
+  // Acquire distributed Redis lock to prevent concurrent processors.
+  const redis = await getRedis();
+  const lockAcquired = await redis.set(LOCK_KEY, "1", { NX: true, PX: LOCK_TTL_MS });
+  if (!lockAcquired) {
+    logger.debug("[outbox-processor] Lock held by another instance — skipping");
     return result;
   }
 
-  logger.info({ count: events.length }, "[outbox-processor] Processing outbox batch");
+  try {
+    const events = await getPendingEvents(BATCH_LIMIT);
 
-  for (const event of events) {
-    result.processed++;
-
-    try {
-      await dispatchEvent(event);
-      await markEventProcessed(event.id);
-      result.succeeded++;
-
-      logger.info(
-        { eventId: event.id, eventType: event.event_type, aggregateType: event.aggregate_type },
-        "[outbox-processor] Event delivered"
-      );
-    } catch (err) {
-      result.failed++;
-
-      const errorMessage = err instanceof Error ? err.message : String(err);
-
-      logger.error(
-        {
-          eventId: event.id,
-          eventType: event.event_type,
-          aggregateType: event.aggregate_type,
-          attempt: event.attempts + 1,
-          error: errorMessage,
-        },
-        "[outbox-processor] Event delivery failed"
-      );
-
-      await markEventFailed(event.id, errorMessage, MAX_ATTEMPTS);
+    if (events.length === 0) {
+      logger.debug("[outbox-processor] No pending events");
+      return result;
     }
+
+    logger.info({ count: events.length }, "[outbox-processor] Processing outbox batch");
+
+    for (const event of events) {
+      result.processed++;
+
+      try {
+        await dispatchEvent(event);
+        await markEventProcessed(event.id);
+        result.succeeded++;
+
+        logger.info(
+          { eventId: event.id, eventType: event.event_type, aggregateType: event.aggregate_type },
+          "[outbox-processor] Event delivered"
+        );
+      } catch (err) {
+        result.failed++;
+
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        const nextAttempt = event.attempts + 1;
+
+        logger.error(
+          {
+            eventId: event.id,
+            eventType: event.event_type,
+            aggregateType: event.aggregate_type,
+            attempt: nextAttempt,
+            error: errorMessage,
+          },
+          "[outbox-processor] Event delivery failed"
+        );
+
+        await markEventFailed(event.id, errorMessage, MAX_ATTEMPTS);
+
+        // Reschedule with exponential backoff if not yet dead.
+        if (nextAttempt < MAX_ATTEMPTS) {
+          await requeueEvent(event.id, nextAttempt);
+        }
+      }
+    }
+
+    logger.info(result, "[outbox-processor] Batch complete");
+
+    // Emit dead-letter count metric for monitoring.
+    try {
+      const deadCount = await getDeadLetterCount();
+      logger.info({ deadLetterCount: deadCount }, "[outbox-processor] dead_letter_count");
+    } catch {
+      // Non-fatal — metric emission must not interrupt the processing result.
+    }
+
+    return result;
+  } finally {
+    // Always release the lock.
+    await redis.del(LOCK_KEY);
   }
-
-  logger.info(result, "[outbox-processor] Batch complete");
-
-  return result;
 }
