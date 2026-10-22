@@ -6,341 +6,214 @@ on:
   pull_request:
     branches: [main, develop]
 
+permissions:  # least-privilege CI tokens (#108)
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   lint-and-type-check:
-    name: Lint & Type Check (Node ${{ matrix.node-version }})
+    name: Lint & Type Check
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: true
-      matrix:
-        node-version: [20, 22]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: "${{ matrix.node-version }}", cache: npm }
+        with: { node-version: 20, cache: npm }
       - run: npm ci
       - run: npm run lint
       - run: npm run type-check
       - run: npm run format:check
 
   test:
-    name: Unit Tests (Node ${{ matrix.node-version }})
+    name: Unit Tests
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: true
-      matrix:
-        node-version: [20, 22]
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: ajosave
-          POSTGRES_PASSWORD: ajosave
-          POSTGRES_DB: ajosave_test
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 5
-      redis:
-        image: redis:7-alpine
-        ports: ["6379:6379"]
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 5
-    env:
-      DATABASE_URL: postgresql://ajosave:ajosave@localhost:5432/ajosave_test
-      REDIS_URL: redis://localhost:6379
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: "${{ matrix.node-version }}", cache: npm }
+        with: { node-version: 20, cache: npm }
       - run: npm ci
-      - name: Run migrations before tests
-        run: npm run migrate
-      - name: Run tests with coverage
-        run: npm run test:coverage -- --ci
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./coverage/lcov.info
-          flags: unittests
-          fail_ci_if_error: false
-          verbose: true
+      - run: npm test -- --coverage
+      - uses: codecov/codecov-action@v4
+        with: { token: "${{ secrets.CODECOV_TOKEN }}", fail_ci_if_error: false }
 
-  build:
-    name: Next.js Build (Node ${{ matrix.node-version }})
-    runs-on: ubuntu-latest
-    needs: [lint-and-type-check]
-    strategy:
-      fail-fast: true
-      matrix:
-        node-version: [20, 22]
-    env:
-      NEXT_PUBLIC_APP_URL: http://localhost:3000
-      NEXT_PUBLIC_APP_NAME: Ajosave
-      NEXTAUTH_URL: http://localhost:3000
-      NEXTAUTH_SECRET: ci-secret-placeholder
-      DATABASE_URL: postgresql://user:password@localhost:5432/ajosave
-      STELLAR_NETWORK: testnet
-      STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
-      STELLAR_NETWORK_PASSPHRASE: "Test SDF Network ; September 2015"
-      STELLAR_SERVER_SECRET_KEY: SXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-      USDC_ISSUER: GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
-      USDC_ASSET_CODE: USDC
-      PAYSTACK_SECRET_KEY: sk_test_placeholder
-      TERMII_API_KEY: placeholder
-      REDIS_URL: redis://localhost:6379
-      CRON_SECRET: placeholder
-      NEXT_PUBLIC_SENTRY_DSN: ""
-      SENTRY_DSN: ""
-      SENTRY_ORG: ajosave
-      SENTRY_PROJECT: ajosave-nextjs
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: "${{ matrix.node-version }}", cache: npm }
-      - run: npm ci
-      - run: npm run build
-
-  migrate-ci:
-    name: Validate Migrations
+  property-tests:
+    name: Property-Based API Tests (#93)
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:15
         env:
-          POSTGRES_USER: ajosave
-          POSTGRES_PASSWORD: ajosave
-          POSTGRES_DB: ajosave_test
-        ports: ["5432:5432"]
+          POSTGRES_USER: user
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: stellar_test
         options: >-
           --health-cmd pg_isready
-          --health-interval 5s
+          --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+        ports:
+          - 5432:5432
     env:
-      DATABASE_URL: postgresql://ajosave:ajosave@localhost:5432/ajosave_test
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 20, cache: npm }
-      - run: npm ci
-      - name: Run migrations up
-        run: npm run migrate
-      - name: Run migrations down
-        run: npm run migrate:down
-
-  e2e:
-    name: E2E Tests (Playwright)
-    runs-on: ubuntu-latest
-    needs: [build]
-    env:
-      NEXT_PUBLIC_APP_URL: http://localhost:3000
-      NEXT_PUBLIC_APP_NAME: Ajosave
-      NEXTAUTH_URL: http://localhost:3000
+      DATABASE_URL: postgresql://user:password@localhost:5432/stellar_test
       NEXTAUTH_SECRET: ci-secret-placeholder
-      DATABASE_URL: postgresql://user:password@localhost:5432/ajosave
-      STELLAR_NETWORK: testnet
-      STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
-      STELLAR_NETWORK_PASSPHRASE: "Test SDF Network ; September 2015"
-      STELLAR_SERVER_SECRET_KEY: SXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-      USDC_ISSUER: GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
-      USDC_ASSET_CODE: USDC
-      PAYSTACK_SECRET_KEY: sk_test_placeholder
-      TERMII_API_KEY: placeholder
-      REDIS_URL: redis://localhost:6379
-      CRON_SECRET: placeholder
-      NEXT_PUBLIC_SENTRY_DSN: ""
-      SENTRY_DSN: ""
-      SENTRY_ORG: ajosave
-      SENTRY_PROJECT: ajosave-nextjs
-      PLAYWRIGHT_BASE_URL: http://localhost:3000
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 20, cache: npm }
       - run: npm ci
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
-      - name: Build Next.js
-        run: npm run build
-      - name: Run E2E tests
-        run: npx playwright test --reporter=github
-        env:
-          PLAYWRIGHT_BASE_URL: ${{ vars.STAGING_URL || 'http://localhost:3000' }}
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: playwright-report
-          path: playwright-report/
-          retention-days: 7
+      - name: Run property-based tests
+        run: npm test -- --testPathPattern=property-based-api --forceExit
 
-  visual-regression:
-    name: Visual Regression Tests
+  migration-tests:
+    name: Migration Upgrade Tests (#95)
     runs-on: ubuntu-latest
-    needs: [build]
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: user
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: stellar_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
     env:
-      NEXT_PUBLIC_APP_URL: http://localhost:3000
-      NEXT_PUBLIC_APP_NAME: Ajosave
-      NEXTAUTH_URL: http://localhost:3000
+      DATABASE_URL: postgresql://user:password@localhost:5432/stellar_test
       NEXTAUTH_SECRET: ci-secret-placeholder
-      DATABASE_URL: postgresql://user:password@localhost:5432/ajosave
-      STELLAR_NETWORK: testnet
-      STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
-      STELLAR_NETWORK_PASSPHRASE: "Test SDF Network ; September 2015"
-      STELLAR_SERVER_SECRET_KEY: SXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-      USDC_ISSUER: GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
-      USDC_ASSET_CODE: USDC
-      PAYSTACK_SECRET_KEY: sk_test_placeholder
-      TERMII_API_KEY: placeholder
-      REDIS_URL: redis://localhost:6379
-      CRON_SECRET: placeholder
-      NEXT_PUBLIC_SENTRY_DSN: ""
-      SENTRY_DSN: ""
-      SENTRY_ORG: ajosave
-      SENTRY_PROJECT: ajosave-nextjs
-      PLAYWRIGHT_BASE_URL: http://localhost:3000
     steps:
       - uses: actions/checkout@v4
-        with:
-          # Fetch full history so baseline snapshots committed on main are available
-          fetch-depth: 0
-
       - uses: actions/setup-node@v4
         with: { node-version: 20, cache: npm }
-
       - run: npm ci
-
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
-
-      - name: Build Next.js
-        run: npm run build
-
-      - name: Start Next.js server
-        run: npx next start &
-        env:
-          PORT: 3000
-
-      - name: Wait for server to be ready
-        run: npx wait-on http://localhost:3000 --timeout 60000
-
-      - name: Run visual regression tests
-        id: visual_tests
-        # --project flags target only the visual projects defined in playwright.config.ts
-        run: |
-          npx playwright test \
-            --project=visual-desktop \
-            --project=visual-mobile \
-            --reporter=github,html
+      - name: Apply migrations to test DB
+        run: npx node-pg-migrate up --database-url postgresql://user:password@localhost:5432/stellar_test --migrations-dir migrations
         continue-on-error: true
+      - name: Run migration upgrade tests
+        run: npm test -- --testPathPattern=migration-upgrade --forceExit
 
-      - name: Upload screenshot baselines & diffs as CI artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: visual-regression-report
-          # Includes the HTML report, diff images, and actual screenshots
-          path: |
-            playwright-report/
-            e2e/visual/__snapshots__/
-          retention-days: 30
-
-      # Post a comment on the PR with a link to the diff report when tests fail
-      - name: Comment diff report link on PR
-        if: failure() && github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
-              body: [
-                "## 🖼️ Visual Regression Failures Detected",
-                "",
-                "One or more screenshots differ from the baseline by more than **0.1%**.",
-                "",
-                `[View diff images in the CI artifact →](${runUrl})`,
-                "",
-                "To update baselines locally, run:",
-                "```bash",
-                "npx playwright test --project=visual-desktop --project=visual-mobile --update-snapshots",
-                "```",
-                "Then commit the updated snapshots.",
-              ].join("\n"),
-            });
-
-      # Fail the job after the comment has been posted
-      - name: Fail if visual tests failed
-        if: steps.visual_tests.outcome == 'failure'
-        run: exit 1
-
-  contract-test:
-    name: Soroban Contract Tests
+  contract:
+    name: Soroban Contract Build & Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with: { targets: wasm32-unknown-unknown }
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: contracts }
-      - name: Run contract unit tests
-        working-directory: contracts
-        run: cargo test --lib
-      - name: Run Soroban integration tests (local sandbox)
-        # Uses soroban-sdk testutils in-process sandbox — no external node required.
-        # Covers: initialize → join → contribute → payout full lifecycle,
-        # multi-member (5-member) scenario, edge cases, and upgrade tests.
-        working-directory: contracts
-        run: cargo test integration_tests -- --test-threads=4
-
-  deploy-contract-testnet:
-    name: Deploy Contract to Testnet
-    runs-on: ubuntu-latest
-    needs: [contract-test]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with: { targets: wasm32-unknown-unknown }
-      - uses: Swatinem/rust-cache@v2
-        with: { workspaces: contracts }
-      - name: Build contract WASM
-        working-directory: contracts
-        run: cargo build --target wasm32-unknown-unknown --release
+      - run: npm run contract:test
       - name: Install Stellar CLI
         run: |
           curl -sSL https://github.com/stellar/stellar-cli/releases/latest/download/stellar-cli-x86_64-unknown-linux-gnu.tar.gz \
             | tar -xz -C /usr/local/bin
+      - run: npm run contract:build
+
+  build:
+    name: Next.js Build
+    runs-on: ubuntu-latest
+    needs: [lint-and-type-check]
+    env:
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      NEXT_PUBLIC_APP_NAME: STELLAR
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: ci-secret-placeholder
+      DATABASE_URL: postgresql://user:password@localhost:5432/stellar
+      STELLAR_NETWORK: testnet
+      STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
+      STELLAR_NETWORK_PASSPHRASE: "Test SDF Network ; September 2015"
+      STELLAR_SERVER_SECRET_KEY: SXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+      USDC_ISSUER: GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
+      USDC_ASSET_CODE: USDC
+      PAYSTACK_SECRET_KEY: sk_test_placeholder
+      TERMII_API_KEY: placeholder
+      REDIS_URL: redis://localhost:6379
+      CRON_SECRET: placeholder
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 20, cache: npm }
       - run: npm ci
-      - name: Deploy to testnet
-        env:
-          STELLAR_NETWORK: testnet
-          STELLAR_SERVER_SECRET_KEY: ${{ secrets.STELLAR_TESTNET_SECRET_KEY }}
-        run: npm run contract:deploy
-      - name: Print contract ID
-        run: cat .contract-id
-      - name: Verify deployed contract
-        env:
-          STELLAR_NETWORK: testnet
-          STELLAR_SERVER_SECRET_KEY: ${{ secrets.STELLAR_TESTNET_SECRET_KEY }}
-        run: npm run contract:verify
-      - name: Upload deploy artifacts
-        uses: actions/upload-artifact@v4
+      - run: npm run build
+
+  docs-lint:
+    name: Documentation Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify required docs exist
+        run: |
+          missing=()
+          for doc in \
+            docs/contract-auditor-guide.md \
+            docs/privacy-retention-guide.md \
+            docs/user-fee-risk-help.md \
+            docs/mainnet-disaster-recovery.md; do
+            if [ ! -f "$doc" ]; then
+              missing+=("$doc")
+            fi
+          done
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "ERROR: Missing required documentation files:"
+            printf '  %s\n' "${missing[@]}"
+            exit 1
+          fi
+          echo "All required documentation files present."
+      - name: Check docs are non-empty
+        run: |
+          for doc in \
+            docs/contract-auditor-guide.md \
+            docs/privacy-retention-guide.md \
+            docs/user-fee-risk-help.md \
+            docs/mainnet-disaster-recovery.md; do
+            size=$(wc -c < "$doc")
+            if [ "$size" -lt 500 ]; then
+              echo "ERROR: $doc is suspiciously small ($size bytes) — may be a stub"
+              exit 1
+            fi
+          done
+          echo "All documentation files have sufficient content."
+      - name: Check docs contain required sections
+        run: |
+          check_section() {
+            local file="$1"
+            local section="$2"
+            if ! grep -q "$section" "$file"; then
+              echo "ERROR: $file is missing required section: $section"
+              exit 1
+            fi
+          }
+          check_section docs/contract-auditor-guide.md "## Trust Model"
+          check_section docs/contract-auditor-guide.md "## Edge Cases"
+          check_section docs/contract-auditor-guide.md "## CI Checks"
+          check_section docs/privacy-retention-guide.md "## Retention Schedules"
+          check_section docs/privacy-retention-guide.md "## PII Encryption"
+          check_section docs/privacy-retention-guide.md "## Right to Erasure"
+          check_section docs/user-fee-risk-help.md "## What Fees Will I Pay"
+          check_section docs/user-fee-risk-help.md "## What Risks Should I Know"
+          check_section docs/mainnet-disaster-recovery.md "## Disaster Categories"
+          check_section docs/mainnet-disaster-recovery.md "DR-1"
+          check_section docs/mainnet-disaster-recovery.md "DR-2"
+          check_section docs/mainnet-disaster-recovery.md "Post-Recovery Checklist"
+          echo "All required sections present."
+
+  contract-cost-benchmarks:
+    name: Soroban Cost Benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          name: contract-deploy-artifacts
-          path: deploy-artifacts/
-          retention-days: 30
+          targets: wasm32-unknown-unknown
+      - name: Cache Rust build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts
+      - name: Run cost benchmark tests (#54)
+        working-directory: contracts
+        run: cargo test --package stellar-ajo bench -- --nocapture

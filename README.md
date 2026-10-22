@@ -1,23 +1,22 @@
-# Ajosave
+# STELLAR
 
 > **Trustless rotating savings circles (Ajo/Esusu) on the Stellar blockchain.**  
 > The traditional West African savings group — now with smart contracts, no middleman, automatic payouts.
 
-[![CI](https://github.com/JosephOnuh/ajosave/actions/workflows/ci.yml/badge.svg)](https://github.com/JosephOnuh/ajosave/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/JosephOnuh/ajosave/branch/main/graph/badge.svg)](https://codecov.io/gh/JosephOnuh/ajosave)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Built on Stellar](https://img.shields.io/badge/Built%20on-Stellar-blue)](https://stellar.org)
 [![Soroban](https://img.shields.io/badge/Smart%20Contracts-Soroban-blueviolet)](https://developers.stellar.org/docs/build/smart-contracts)
 
 ---
 
-## What is Ajosave?
+## What is STELLAR?
 
 Ajo (also called Esusu or Susu) is a traditional rotating savings group practiced across West Africa and the diaspora. A group of people each contribute a fixed amount every cycle, and one member takes the full pot each round until everyone has received their payout.
 
-Today this runs entirely on trust — no contracts, no guarantees, frequent fraud. **Ajosave puts it on-chain.**
+Today this runs entirely on trust — no contracts, no guarantees, frequent fraud. **STELLAR puts it on-chain.**
 
 **Who is it for?**
+
 - Nigerians and West Africans running savings circles domestically and in the diaspora
 - Anyone who wants a disciplined, community-based savings mechanism with zero counterparty risk
 
@@ -50,16 +49,16 @@ Today this runs entirely on trust — no contracts, no guarantees, frequent frau
 
 ### Tech Stack
 
-| Layer | Technology |
-|-------|-----------|
-| Frontend | Next.js 14 (App Router), TypeScript, Vanilla CSS |
-| Backend | Next.js Route Handlers, server services layer |
-| Blockchain | Stellar, Soroban smart contracts (Rust) |
-| Stablecoin | USDC on Stellar |
-| Payments | Paystack (NGN on-ramp) |
-| SMS/OTP | Termii |
-| Database | PostgreSQL |
-| Cache/Queue | Redis |
+| Layer       | Technology                                       |
+| ----------- | ------------------------------------------------ |
+| Frontend    | Next.js 14 (App Router), TypeScript, Vanilla CSS |
+| Backend     | Next.js Route Handlers, server services layer    |
+| Blockchain  | Stellar, Soroban smart contracts (Rust)          |
+| Stablecoin  | USDC on Stellar                                  |
+| Payments    | Paystack (NGN on-ramp)                           |
+| SMS/OTP     | Termii                                           |
+| Database    | PostgreSQL                                       |
+| Cache/Queue | Redis                                            |
 
 ---
 
@@ -99,14 +98,14 @@ scripts/
 
 The Ajo contract (`contracts/ajo/`) handles the full circle lifecycle:
 
-| Function | Description |
-|----------|-------------|
-| `initialize` | Set up circle params (members, amount, frequency) |
-| `join` | Member joins and locks first contribution |
-| `contribute` | Member pays for current cycle |
-| `payout` | Admin triggers rotation payout after cycle time |
-| `get_state` | Read current cycle, next payout time, completion |
-| `get_members` | List all member addresses |
+| Function      | Description                                       |
+| ------------- | ------------------------------------------------- |
+| `initialize`  | Set up circle params (members, amount, frequency) |
+| `join`        | Member joins and locks first contribution         |
+| `contribute`  | Member pays for current cycle                     |
+| `payout`      | Admin triggers rotation payout after cycle time   |
+| `get_state`   | Read current cycle, next payout time, completion  |
+| `get_members` | List all member addresses                         |
 
 ---
 
@@ -115,44 +114,32 @@ The Ajo contract (`contracts/ajo/`) handles the full circle lifecycle:
 ### Prerequisites
 
 - Node.js ≥ 20, npm ≥ 10
-- Rust + `wasm32-unknown-unknown` (for contract work)
+- Docker (or a local PostgreSQL 15+ and Redis 7+) — see [docs/LOCAL_DATABASE.md](docs/LOCAL_DATABASE.md) for the database setup
+- Rust + Cargo, plus the `wasm32-unknown-unknown` target (for contract work): `rustup target add wasm32-unknown-unknown`
 - [Stellar CLI](https://developers.stellar.org/docs/tools/developer-tools/cli/stellar-cli)
 
 ### Installation
 
 ```bash
-git clone https://github.com/JosephOnuh/ajosave.git
+git clone https://github.com/joekeyz8/ajosave.git
 cd ajosave
 npm install
 cp .env.example .env.local
-# Fill in environment variables
+# Fill in environment variables — see docs/environment-variables.md for what
+# each one does and which are required in production
 npm run dev
+# → http://localhost:3000
 ```
 
 ### Smart Contract
+
+How the contract, Horizon, USDC, Freighter, and the event indexer fit together is mapped in [docs/STELLAR_INTEGRATION.md](docs/STELLAR_INTEGRATION.md).
 
 ```bash
 npm run contract:build   # Build WASM
 npm run contract:test    # Run Rust tests
 STELLAR_NETWORK=testnet npm run contract:deploy
 ```
-
-#### Testnet Deployment
-
-The Ajo contract is deployed on **Stellar Testnet**:
-
-| Field | Value |
-|-------|-------|
-| Network | Stellar Testnet |
-| Contract ID | `CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC` |
-| Explorer | [View on Stellar Expert](https://stellar.expert/explorer/testnet/contract/CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC) |
-
-Set in your environment:
-```
-STELLAR_AJO_CONTRACT_ID=CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC
-```
-
-> CI automatically re-deploys the contract to testnet on every merge to `main` via the `deploy-contract-testnet` job.
 
 ---
 
@@ -171,14 +158,12 @@ STELLAR_AJO_CONTRACT_ID=CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a PR.
 
-See [CHANGELOG.md](CHANGELOG.md) for a full history of changes.
-
 - Bugs → [Bug Report](.github/ISSUE_TEMPLATE/bug_report.md)
 - Features → [Feature Request](.github/ISSUE_TEMPLATE/feature_request.md)
-- Security → **security@ajosave.app**
+- Security → **security@stellar.app**
 
 ---
 
 ## License
 
-[MIT](LICENSE) © 2024 Ajosave
+[MIT](LICENSE) © 2024 STELLAR

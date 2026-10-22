@@ -8,29 +8,52 @@
   gap: var(--space-4);
   transition: border-color var(--transition-base);
 }
-.card:hover { border-color: var(--color-brand-primary); }
+.card:hover {
+  border-color: var(--color-brand-primary);
+}
 
-.header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
 
-.name { font-size: var(--text-base); font-weight: var(--font-semibold); color: var(--color-text-primary); }
+.name {
+  font-size: var(--text-base);
+  font-weight: var(--font-semibold);
+  color: var(--color-text-primary);
+}
 
-.amount { font-size: var(--text-2xl); font-weight: var(--font-bold); color: var(--color-text-primary); }
-.freq { font-size: var(--text-sm); font-weight: var(--font-normal); color: var(--color-text-muted); margin-left: var(--space-1); }
+.amount {
+  font-size: var(--text-2xl);
+  font-weight: var(--font-bold);
+  color: var(--color-text-primary);
+}
+.freq {
+  font-size: var(--text-sm);
+  font-weight: var(--font-normal);
+  color: var(--color-text-muted);
+  margin-left: var(--space-1);
+}
 
-.meta { display: flex; flex-direction: column; gap: var(--space-1); font-size: var(--text-xs); color: var(--color-text-muted); }
+.meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
 
-.progress { height: 4px; background: var(--color-border); border-radius: var(--radius-full); overflow: hidden; }
-.progressBar { height: 100%; background: var(--color-brand-primary); border-radius: var(--radius-full); transition: width var(--transition-slow); }
-
-.category {
-  display: inline-block;
-  font-size: 0.7rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  padding: 0.15rem 0.5rem;
-  border-radius: 999px;
-  background: var(--color-accent, #6c47ff22);
-  color: var(--color-accent, #6c47ff);
-  margin-bottom: 0.5rem;
+.progress {
+  height: 4px;
+  background: var(--color-border);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+.progressBar {
+  height: 100%;
+  background: var(--color-brand-primary);
+  border-radius: var(--radius-full);
+  transition: width var(--transition-slow);
 }

@@ -1,43 +1,22 @@
 :root {
   /* Brand — deep green + gold (wealth, trust, Africa) */
   --color-brand-primary: #0f7a4a;
-  --color-brand-primary-rgb: 15, 122, 74;
   --color-brand-primary-hover: #0a5e38;
   --color-brand-accent: #f5a623;
   --color-brand-accent-hover: #d4891a;
 
-  /* Light theme colors */
-  --color-bg-light: #ffffff;
-  --color-bg-surface-light: #f8fafc;
-  --color-bg-elevated-light: #f1f5f9;
-  --color-border-light: #e2e8f0;
-  --color-border-subtle-light: #f1f5f9;
-  --color-text-primary-light: #0f172a;
-  --color-text-secondary-light: #475569;
-  --color-text-muted-light: #94a3b8;
-  --color-text-inverse-light: #ffffff;
+  /* Backgrounds */
+  --color-bg: #080f0b;
+  --color-bg-surface: #0e1a12;
+  --color-bg-elevated: #162019;
+  --color-border: #1e3028;
+  --color-border-subtle: #122018;
 
-  /* Dark theme colors */
-  --color-bg-dark: #080f0b;
-  --color-bg-surface-dark: #0e1a12;
-  --color-bg-elevated-dark: #162019;
-  --color-border-dark: #1e3028;
-  --color-border-subtle-dark: #122018;
-  --color-text-primary-dark: #eef5f0;
-  --color-text-secondary-dark: #8aab94;
-  --color-text-muted-dark: #4a6655;
-  --color-text-inverse-dark: #080f0b;
-
-  /* Default to light theme */
-  --color-bg: var(--color-bg-light);
-  --color-bg-surface: var(--color-bg-surface-light);
-  --color-bg-elevated: var(--color-bg-elevated-light);
-  --color-border: var(--color-border-light);
-  --color-border-subtle: var(--color-border-subtle-light);
-  --color-text-primary: var(--color-text-primary-light);
-  --color-text-secondary: var(--color-text-secondary-light);
-  --color-text-muted: var(--color-text-muted-light);
-  --color-text-inverse: var(--color-text-inverse-light);
+  /* Text */
+  --color-text-primary: #eef5f0;
+  --color-text-secondary: #8aab94;
+  --color-text-muted: #4a6655;
+  --color-text-inverse: #080f0b;
 
   /* Semantic */
   --color-success: #22c55e;
@@ -68,23 +47,36 @@
   --leading-relaxed: 1.75;
 
   /* Spacing */
-  --space-1: 0.25rem;  --space-2: 0.5rem;   --space-3: 0.75rem;
-  --space-4: 1rem;     --space-5: 1.25rem;  --space-6: 1.5rem;
-  --space-8: 2rem;     --space-10: 2.5rem;  --space-12: 3rem;
-  --space-16: 4rem;    --space-20: 5rem;    --space-24: 6rem;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+  --space-20: 5rem;
+  --space-24: 6rem;
 
   /* Radii */
-  --radius-sm: 0.375rem; --radius-md: 0.5rem;  --radius-lg: 0.75rem;
-  --radius-xl: 1rem;     --radius-2xl: 1.5rem; --radius-full: 9999px;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.5rem;
+  --radius-full: 9999px;
 
   /* Shadows */
-  --shadow-sm: 0 1px 2px rgba(0,0,0,0.1);
-  --shadow-md: 0 4px 12px rgba(0,0,0,0.15);
-  --shadow-glow: 0 0 24px rgba(15,122,74,0.2);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.6);
+  --shadow-glow: 0 0 24px rgba(15, 122, 74, 0.4);
 
   /* Transitions */
   --transition-fast: 120ms ease;
   --transition-base: 200ms ease;
+  --transition-normal: 200ms ease;
 
   /* Layout */
   --max-width-xl: 1280px;
@@ -92,52 +84,10 @@
   --max-width-sm: 640px;
 }
 
-/* Dark theme via prefers-color-scheme */
-@media (prefers-color-scheme: dark) {
+/* ─── Bottom tab bar layout token ───────────────────────────────────────────── */
+/* Applied as bottom padding on <main> so content is never obscured on mobile.  */
+@media (max-width: 767px) {
   :root {
-    --color-bg: var(--color-bg-dark);
-    --color-bg-surface: var(--color-bg-surface-dark);
-    --color-bg-elevated: var(--color-bg-elevated-dark);
-    --color-border: var(--color-border-dark);
-    --color-border-subtle: var(--color-border-subtle-dark);
-    --color-text-primary: var(--color-text-primary-dark);
-    --color-text-secondary: var(--color-text-secondary-dark);
-    --color-text-muted: var(--color-text-muted-dark);
-    --color-text-inverse: var(--color-text-inverse-dark);
-    --shadow-sm: 0 1px 2px rgba(0,0,0,0.5);
-    --shadow-md: 0 4px 12px rgba(0,0,0,0.6);
-    --shadow-glow: 0 0 24px rgba(15,122,74,0.4);
+    --bottom-tab-bar-height: 60px;
   }
-}
-
-/* Manual dark theme override */
-[data-theme="dark"] {
-  --color-bg: var(--color-bg-dark);
-  --color-bg-surface: var(--color-bg-surface-dark);
-  --color-bg-elevated: var(--color-bg-elevated-dark);
-  --color-border: var(--color-border-dark);
-  --color-border-subtle: var(--color-border-subtle-dark);
-  --color-text-primary: var(--color-text-primary-dark);
-  --color-text-secondary: var(--color-text-secondary-dark);
-  --color-text-muted: var(--color-text-muted-dark);
-  --color-text-inverse: var(--color-text-inverse-dark);
-  --shadow-sm: 0 1px 2px rgba(0,0,0,0.5);
-  --shadow-md: 0 4px 12px rgba(0,0,0,0.6);
-  --shadow-glow: 0 0 24px rgba(15,122,74,0.4);
-}
-
-/* Manual light theme override */
-[data-theme="light"] {
-  --color-bg: var(--color-bg-light);
-  --color-bg-surface: var(--color-bg-surface-light);
-  --color-bg-elevated: var(--color-bg-elevated-light);
-  --color-border: var(--color-border-light);
-  --color-border-subtle: var(--color-border-subtle-light);
-  --color-text-primary: var(--color-text-primary-light);
-  --color-text-secondary: var(--color-text-secondary-light);
-  --color-text-muted: var(--color-text-muted-light);
-  --color-text-inverse: var(--color-text-inverse-light);
-  --shadow-sm: 0 1px 2px rgba(0,0,0,0.1);
-  --shadow-md: 0 4px 12px rgba(0,0,0,0.15);
-  --shadow-glow: 0 0 24px rgba(15,122,74,0.2);
 }

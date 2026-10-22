@@ -40,3 +40,5 @@ export const POST = withSanitizedBody(async (req: NextRequest): Promise<NextResp
     );
   }
 });
+
+export const PATCH = POST;

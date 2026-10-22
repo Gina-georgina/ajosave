@@ -1,4 +1,15 @@
 version: 2
+# Dependency update policy (issue #268):
+# - npm: ONE weekly PR with all minor+patch updates (production and
+#   development dependencies together). Major updates stay as individual
+#   PRs for manual CODEOWNERS review (SLA: within 7 days).
+# - cargo: grouped separately from npm so Rust contract updates review
+#   independently.
+# - github-actions: patch-only group, auto-merged by
+#   .github/workflows/dependabot-auto-merge.yml once CI is green.
+# - Auto-merge of patch PRs: .github/workflows/dependabot-auto-merge.yml.
+# - Stale PRs (idle 30 days): closed with a comment by
+#   .github/workflows/dependabot-stale-close.yml.
 updates:
   - package-ecosystem: "npm"
     directory: "/"
@@ -8,29 +19,15 @@ updates:
       time: "06:00"
       timezone: "UTC"
     open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
     groups:
-      production-dependencies:
-        dependency-type: "production"
-        update-types:
-          - "minor"
-          - "patch"
-      development-dependencies:
-        dependency-type: "development"
-        update-types:
-          - "minor"
-          - "patch"
+      npm-minor-patch:
+        dependency-type: ["production", "development"]
+        update-types: ["minor", "patch"]
     ignore:
       - dependency-name: "next"
         update-types: ["major"]
-    automerge:
-      - branch: "main"
-        match:
-          dependency-type: "production"
-          update-types:
-            - "patch"
-        commit-message:
-          prefix: "chore"
-          include: "scope"
 
   - package-ecosystem: "cargo"
     directory: "/contracts"
@@ -40,14 +37,11 @@ updates:
       time: "06:00"
       timezone: "UTC"
     open-pull-requests-limit: 5
-    automerge:
-      - branch: "main"
-        match:
-          update-types:
-            - "patch"
-        commit-message:
-          prefix: "chore"
-          include: "scope"
+    labels:
+      - "dependencies"
+    groups:
+      cargo-minor-patch:
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -57,11 +51,8 @@ updates:
       time: "06:00"
       timezone: "UTC"
     open-pull-requests-limit: 10
-    automerge:
-      - branch: "main"
-        match:
-          update-types:
-            - "patch"
-        commit-message:
-          prefix: "chore"
-          include: "scope"
+    labels:
+      - "dependencies"
+    groups:
+      github-actions-patch:
+        update-types: ["patch"]

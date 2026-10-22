@@ -1,9 +1,4 @@
-import { SupportedCurrency } from "@/lib/currency";
-export type { SupportedCurrency };
-
 // ─── User ─────────────────────────────────────────────────────────────────────
-export type UserRole = "user" | "admin";
-
 export interface User {
   id: string;
   phone: string;
@@ -11,78 +6,44 @@ export interface User {
   email?: string;
   stellarPublicKey?: string;
   reputationScore: number; // 0–100, built from on-time contributions
-  role: UserRole;
-  createdAt: Date;
-}
-
-export interface ReputationScore {
-  userId: string;
-  score: number;
-  level: string;
-  onTimeContributions: number;
-  circlesCompleted: number;
-  defaults: number;
-  updatedAt: Date;
-}
-
-export interface Referral {
-  id: string;
-  referrerId: string;
-  referredUserId: string;
-  code: string;
   createdAt: Date;
 }
 
 // ─── Circle ───────────────────────────────────────────────────────────────────
-export type CircleStatus = "open" | "active" | "completed" | "cancelled" | "paused";
-export type CircleType = "public" | "private";
+export type CircleStatus = "open" | "active" | "completed" | "cancelled";
 export type CycleFrequency = "weekly" | "biweekly" | "monthly";
-export type PayoutMethod = "fixed" | "randomized";
 
 export interface Circle {
   id: string;
   name: string;
   creatorId: string;
   contributionUsdc: string; // per-member per-cycle amount
-  contributionFiat: number; // renamed from contributionNgn
-  contributionCurrency: SupportedCurrency;
-  circleType: CircleType;
+  contributionNgn: number;
   maxMembers: number;
   cycleFrequency: CycleFrequency;
-  payoutMethod: PayoutMethod;
-  randomizationSeed?: string; // stored seed for verifiability
-  gracePeriodHours: number;   // hours after cycle start before member is marked defaulted
   status: CircleStatus;
   contractId?: string; // deployed Soroban circle contract
   currentCycle: number; // 1-indexed
-  memberCount?: number; // calculated field
   nextPayoutAt?: Date;
-  pausedAt?: Date | null;
-  minReputation?: number; // minimum reputation score required to join (0-100)
-  yieldStrategy?: "none" | "blend";
-  penaltyPercent?: number;
   createdAt: Date;
   updatedAt: Date;
-  deletedAt?: Date | null; // soft delete timestamp
 }
 
 // ─── Membership ───────────────────────────────────────────────────────────────
-export type MemberStatus = "pending" | "active" | "rejected" | "defaulted" | "completed";
+export type MemberStatus = "pending" | "active" | "defaulted" | "completed";
 
 export interface Member {
   id: string;
   circleId: string;
   userId: string;
-  displayName?: string; // joined from users table
-  position: number | null; // payout order (1 = first to receive), null for pending members
+  position: number; // payout order (1 = first to receive)
   status: MemberStatus;
   hasReceivedPayout: boolean;
   joinedAt: Date;
-  reviewedAt?: Date; // when creator approved/rejected the request
 }
 
 // ─── Contribution ─────────────────────────────────────────────────────────────
-export type ContributionStatus = "pending" | "confirmed" | "missed" | "refund_pending" | "refunded";
+export type ContributionStatus = "pending" | "confirmed" | "missed";
 
 export interface Contribution {
   id: string;
@@ -93,7 +54,6 @@ export interface Contribution {
   status: ContributionStatus;
   txHash?: string;
   createdAt: Date;
-  updatedAt?: Date;
 }
 
 // ─── Payout ───────────────────────────────────────────────────────────────────
@@ -107,50 +67,63 @@ export interface Payout {
   paidAt: Date;
 }
 
-// ─── Dispute ─────────────────────────────────────────────────────────────────
-export type DisputeType = "missed_payout" | "wrong_amount" | "other";
-export type DisputeStatus = "open" | "investigating" | "resolved" | "rejected";
+// ─── Chat ─────────────────────────────────────────────────────────────────────
 
-export interface Dispute {
+/** Allowed emoji reactions (at minimum the 4 required by issue #211). */
+export const ALLOWED_REACTIONS = ["👍", "❤️", "😂", "🙏"] as const;
+export type ReactionEmoji = (typeof ALLOWED_REACTIONS)[number];
+
+export interface MessageReaction {
   id: string;
-  contributionId?: string;
-  memberId: string;
-  circleId: string;
-  paystackReference?: string;
-  type: DisputeType;
-  reason: string;
-  evidence?: string;
-  status: DisputeStatus;
-  resolutionNotes?: string;
-  resolvedBy?: string;
-  createdAt: Date;
-  resolvedAt?: Date;
-}
-
-// ─── Early Exit ───────────────────────────────────────────────────────────────
-export type EarlyExitStatus = "pending" | "approved" | "rejected";
-
-export interface EarlyExitRequest {
-  id: string;
-  circleId: string;
-  memberId: string;
+  messageId: string;
   userId: string;
-  penaltyPercent: number;
-  penaltyUsdc: string;
-  refundUsdc: string;
-  status: EarlyExitStatus;
+  emoji: ReactionEmoji;
   createdAt: Date;
-  processedAt?: Date;
 }
 
-// ─── Circle Chat ──────────────────────────────────────────────────────────────
+/** Aggregated reaction count for one emoji on a message. */
+export interface ReactionCount {
+  emoji: ReactionEmoji;
+  count: number;
+  /** Whether the currently-authenticated user has reacted with this emoji. */
+  reacted: boolean;
+}
+
 export interface CircleMessage {
   id: string;
   circleId: string;
   userId: string;
-  displayName: string; // joined from users table at read time
+  displayName: string;
   content: string;
-  createdAt: string; // ISO 8601 string
+  createdAt: Date;
+  /** null = top-level message; set = a reply inside a thread */
+  parentMessageId?: string | null;
+  /** Aggregated reaction counts for this message (populated by API). */
+  reactions?: ReactionCount[];
+  /** Number of direct replies to this message (populated by API). */
+  replyCount?: number;
+}
+
+// ─── Circle discovery filters ─────────────────────────────────────────────────
+
+/**
+ * Filter parameters accepted by GET /api/v1/circles.
+ *
+ * All fields are optional — omitting a field means "no constraint".
+ * - `status`            Filter by circle lifecycle status.
+ * - `frequency`         Filter by contribution cycle frequency.
+ * - `minAmount`         Minimum contributionNgn (inclusive).
+ * - `maxAmount`         Maximum contributionNgn (inclusive).
+ * - `maxMembers`        Exact maximum-member count (e.g. show only 5-person circles).
+ * - `search`            Case-insensitive substring match against circle name.
+ */
+export interface CircleFilters {
+  status?: CircleStatus;
+  frequency?: CycleFrequency;
+  minAmount?: number;
+  maxAmount?: number;
+  maxMembers?: number;
+  search?: string;
 }
 
 // ─── API ──────────────────────────────────────────────────────────────────────
@@ -162,6 +135,5 @@ export interface ApiError {
   success: false;
   error: string;
   code?: string;
-  data?: any;
 }
 export type ApiResponse<T> = ApiSuccess<T> | ApiError;

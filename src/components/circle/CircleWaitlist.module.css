@@ -84,13 +84,36 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  min-width: 2.5rem;
 }
 
 .statusHelp {
-  font-size: 0.75rem;
-  line-height: 1.4;
+  font-size: 0.8125rem;
+  line-height: 1.5;
   color: var(--color-text-secondary, #4b5563);
   margin: 0;
+}
+
+.statusHint {
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--color-text-muted, #9ca3af);
+  margin: 0;
+}
+
+.notification {
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  color: #d97706;
+  font-size: 0.875rem;
+  font-weight: 500;
+  padding: var(--space-3, 12px) var(--space-4, 16px);
+  border-radius: var(--radius-md, 6px);
+  margin: 0;
+}
+
+[data-theme="dark"] .notification {
+  color: #fbbf24;
 }
 
 .error {

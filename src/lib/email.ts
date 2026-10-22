@@ -737,6 +737,65 @@ export async function sendJoinRequestApprovedEmail(
 }
 
 /**
+ * Notify an invite issuer that one of their invite links was redeemed.
+ */
+export async function sendInviteRedeemedEmail(
+  email: string,
+  displayName: string,
+  circleName: string,
+  userId: string
+): Promise<void> {
+  const html = `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background: #4F46E5; color: white; padding: 20px; text-align: center; }
+          .content { padding: 20px; background: #f9fafb; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>🎟️ Invite Redeemed</h1>
+          </div>
+          <div class="content">
+            <p>Hi ${displayName},</p>
+            <p>One of your invite links to <strong>${circleName}</strong> has just been used to join the circle.</p>
+            <p>Invite links are single-use, so this one is now closed.</p>
+            <p><strong>The Ajosave Team</strong></p>
+          </div>
+          ${getUnsubscribeFooterHtml(userId)}
+        </div>
+      </body>
+    </html>
+  `;
+
+  const text = `
+    Invite Redeemed
+
+    Hi ${displayName},
+
+    One of your invite links to ${circleName} has just been used to join the circle.
+
+    Invite links are single-use, so this one is now closed.
+
+    The Ajosave Team
+    ${getUnsubscribeFooterText(userId)}
+  `;
+
+  await sendEmail({
+    to: email,
+    subject: `Your invite to ${circleName} was used`,
+    html,
+    text,
+  });
+}
+
+/**
  * Send join request rejected email
  */
 export async function sendJoinRequestRejectedEmail(

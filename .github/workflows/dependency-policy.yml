@@ -1,0 +1,241 @@
+name: Dependency Security Policy
+
+# Enforces the dependency security policy defined in
+# docs/DEPENDENCY_SECURITY_POLICY.md (#107).
+#
+# Runs on every PR and push to main / develop.
+# Blocks merge when high or critical advisories are found.
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: dep-policy-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write   # post audit summary comment on PRs
+
+jobs:
+  # ── npm audit ──────────────────────────────────────────────────────────────
+  npm-audit-enforce:
+    name: npm Audit (block on high+)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run npm audit (JSON)
+        id: npm_audit
+        run: |
+          set +e
+          npm audit --audit-level=high --json > npm-audit.json
+          AUDIT_EXIT=$?
+          echo "exit_code=${AUDIT_EXIT}" >> "$GITHUB_OUTPUT"
+          set -e
+
+      - name: Parse and summarise audit results
+        id: parse
+        run: |
+          node - << 'EOF'
+          const fs   = require('fs');
+          const raw  = fs.readFileSync('npm-audit.json', 'utf8');
+          const data = JSON.parse(raw);
+          const vulns = data.vulnerabilities ?? {};
+          const counts = {};
+          for (const v of Object.values(vulns)) {
+            const sev = v.severity ?? 'unknown';
+            counts[sev] = (counts[sev] ?? 0) + 1;
+          }
+          const total = Object.values(counts).reduce((a, b) => a + b, 0);
+          const high  = (counts.high    ?? 0) + (counts.critical ?? 0);
+          console.log(`total=${total}`);
+          console.log(`high_or_critical=${high}`);
+          console.log(`summary=${JSON.stringify(counts)}`);
+          fs.writeFileSync('npm-audit-summary.txt',
+            `total=${total}\nhigh_or_critical=${high}\nsummary=${JSON.stringify(counts)}`);
+          EOF
+
+          source npm-audit-summary.txt
+          echo "total=${total}"                         >> "$GITHUB_OUTPUT"
+          echo "high_or_critical=${high_or_critical}"  >> "$GITHUB_OUTPUT"
+          echo "summary=${summary}"                     >> "$GITHUB_OUTPUT"
+
+      - name: Post PR comment with audit results
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const total = '${{ steps.parse.outputs.total }}';
+            const high  = '${{ steps.parse.outputs.high_or_critical }}';
+            const summary = '${{ steps.parse.outputs.summary }}';
+            const icon    = high > 0 ? '🚨' : (total > 0 ? '⚠️' : '✅');
+            const body    = total === '0'
+              ? `### ${icon} npm Audit\n✅ No vulnerabilities found.`
+              : `### ${icon} npm Audit\n**${total} total** vulnerabilities — breakdown: \`${summary}\`\n\n` +
+                (high > 0
+                  ? `❌ **${high} high/critical** — this PR is **blocked** until resolved.\n`
+                  : '⚠️ No high/critical issues. Please triage moderate/low findings.');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Fail on high or critical vulnerabilities
+        run: |
+          HIGH="${{ steps.parse.outputs.high_or_critical }}"
+          if [ "${HIGH}" -gt 0 ]; then
+            echo "::error::npm audit found ${HIGH} high/critical vulnerabilities."
+            echo "Resolve them before merging. See docs/DEPENDENCY_SECURITY_POLICY.md"
+            exit 1
+          fi
+          echo "No high/critical npm vulnerabilities found."
+
+      - name: Upload npm audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-audit-report
+          path: npm-audit.json
+          retention-days: 30
+
+  # ── Cargo audit ────────────────────────────────────────────────────────────
+  cargo-audit-enforce:
+    name: Cargo Audit (block on high+)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run cargo audit (JSON)
+        id: cargo_audit
+        working-directory: contracts
+        run: |
+          set +e
+          cargo audit --json > ../cargo-audit.json
+          AUDIT_EXIT=$?
+          echo "exit_code=${AUDIT_EXIT}" >> "$GITHUB_OUTPUT"
+          set -e
+
+      - name: Parse and summarise cargo audit
+        id: parse
+        run: |
+          node - << 'EOF'
+          const fs   = require('fs');
+          let high = 0, total = 0;
+          try {
+            const data  = JSON.parse(fs.readFileSync('cargo-audit.json', 'utf8'));
+            const vulns = data.vulnerabilities?.list ?? [];
+            total = vulns.length;
+            high  = vulns.filter(v => {
+              const sev = (v.advisory?.cvss ?? '').toUpperCase();
+              return sev === 'HIGH' || sev === 'CRITICAL';
+            }).length;
+          } catch { /* no output or parse error */ }
+          console.log(`total=${total}`);
+          console.log(`high_or_critical=${high}`);
+          fs.writeFileSync('cargo-summary.txt', `total=${total}\nhigh_or_critical=${high}`);
+          EOF
+
+          source cargo-summary.txt
+          echo "total=${total}"                        >> "$GITHUB_OUTPUT"
+          echo "high_or_critical=${high_or_critical}" >> "$GITHUB_OUTPUT"
+
+      - name: Post PR comment with cargo audit results
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const total = '${{ steps.parse.outputs.total }}';
+            const high  = '${{ steps.parse.outputs.high_or_critical }}';
+            const icon  = high > 0 ? '🚨' : (total > 0 ? '⚠️' : '✅');
+            const body  = total === '0'
+              ? `### ${icon} Cargo Audit\n✅ No Rust vulnerabilities found.`
+              : `### ${icon} Cargo Audit\n**${total} total** Rust vulnerabilities — ` +
+                (high > 0
+                  ? `❌ **${high} high/critical** — this PR is **blocked**.\n`
+                  : '⚠️ No high/critical issues. Please triage findings.');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Fail on high or critical Rust vulnerabilities
+        run: |
+          HIGH="${{ steps.parse.outputs.high_or_critical }}"
+          if [ "${HIGH}" -gt 0 ]; then
+            echo "::error::cargo audit found ${HIGH} high/critical vulnerabilities."
+            echo "Resolve them before merging. See docs/DEPENDENCY_SECURITY_POLICY.md"
+            exit 1
+          fi
+          echo "No high/critical Cargo vulnerabilities found."
+
+      - name: Upload cargo audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-audit-report
+          path: cargo-audit.json
+          retention-days: 30
+
+  # ── Actions pin check ──────────────────────────────────────────────────────
+  actions-pin-check:
+    name: Verify Third-Party Actions Are SHA-Pinned
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check that non-official Actions are SHA-pinned
+        run: |
+          FAIL=0
+          # Collect all `uses:` lines from workflow files
+          grep -rh 'uses:' .github/workflows/ \
+            | sed 's/.*uses:[[:space:]]*//' \
+            | tr -d '"'"'" \
+            | sort -u \
+            > /tmp/all-uses.txt
+
+          while IFS= read -r ref; do
+            # Skip blank lines or local composite actions
+            [[ -z "$ref" || "$ref" == ./* ]] && continue
+            owner=$(echo "$ref" | cut -d'/' -f1)
+            # Allow GitHub's own actions without SHA pin
+            if [[ "$owner" == "actions" || "$owner" == "github" ]]; then
+              continue
+            fi
+            # Third-party: must include an @<40-hex-char> SHA
+            if ! echo "$ref" | grep -qE '@[0-9a-f]{40}'; then
+              echo "::warning::Third-party action not SHA-pinned: $ref"
+              FAIL=1
+            fi
+          done < /tmp/all-uses.txt
+
+          if [ "$FAIL" -eq 1 ]; then
+            echo "::error::One or more third-party Actions are not pinned to a full commit SHA."
+            echo "See docs/DEPENDENCY_SECURITY_POLICY.md §4 for the pinning policy."
+            exit 1
+          fi
+          echo "All third-party Actions are SHA-pinned."

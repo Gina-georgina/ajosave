@@ -1,6 +1,7 @@
 ## Summary
 
 ## Type of change
+
 - [ ] Bug fix
 - [ ] New feature
 - [ ] Refactor
@@ -8,9 +9,11 @@
 - [ ] Smart contract change
 
 ## Related issues
+
 Closes #
 
 ## Checklist
+
 - [ ] Tests pass (`npm test`)
 - [ ] Lint passes (`npm run lint`)
 - [ ] Types pass (`npm run type-check`)

@@ -8,6 +8,7 @@ labels: ["bug", "needs-triage"]
 ## Describe the bug
 
 ## Steps to reproduce
+
 1.
 2.
 3.
@@ -17,6 +18,7 @@ labels: ["bug", "needs-triage"]
 ## Actual behavior
 
 ## Environment
+
 - OS:
 - Node version:
 - Browser:

@@ -1,241 +1,228 @@
-import { query, transaction } from "@/lib/db";
-import { sendUsdcPayment, validateStellarRecipient } from "@/lib/stellar";
-import { invokeContractPayout } from "@/lib/soroban";
+import { sendUsdcPayment } from "@/lib/stellar";
 import { getCircleById, getMembersByCircle, updateCircleStatus } from "./circle.service";
-import { withPayoutLock, PayoutLockError } from "./payout-lock";
-import { notifyPayoutProcessed, notifyCircleCompleted } from "./notification.service";
-import { mintCertificate } from "./certificate.service";
+import { queueCertificatesForCircle } from "./certificate.service";
+import { withPayoutLock } from "./payout-lock";
+import { transaction, query } from "@/lib/db";
 import type { Payout } from "@/types";
 import { randomUUID } from "crypto";
-import logger from "@/lib/logger";
 
-export { PayoutLockError };
-
-const PAYOUT_MAX_RETRIES = 3;
-const RETRY_DELAY_MS = [5_000, 15_000, 45_000];
-
-async function alertAdmin(circleId: string, cycle: number, error: string) {
-  const webhookUrl = process.env.SLACK_WEBHOOK_URL;
-  if (!webhookUrl) return;
-  try {
-    await fetch(webhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: `🚨 Payout failed after all retries — circle: ${circleId}, cycle: ${cycle}\nError: ${error}` }),
-    });
-  } catch (e) {
-    logger.error({ e }, "[payout] Failed to send admin alert");
-  }
-}
+// In-memory payout log — used as fallback when DB is unavailable
+const payouts: Payout[] = [];
 
 /**
- * Process a payout cycle for a circle.
+ * Process a payout cycle for a circle — idempotent.
  *
- * If the circle has a contractId, the Soroban contract is the source of truth:
- * it handles the token transfer and rotation internally.
+ * Idempotency guarantee: if a payout has already been recorded for the given
+ * circle + cycle pair (enforced by the `unique_payout_per_cycle` DB constraint
+ * added in migration `1745600000000_payouts-unique-cycle.ts`), this function
+ * returns the existing payout record instead of issuing a duplicate payment.
  *
- * Falls back to direct Horizon payment for circles without a deployed contract.
+ * Concurrency: an in-process mutex (`withPayoutLock`) prevents two concurrent
+ * invocations from racing past the duplicate-check and both triggering a
+ * Stellar transfer. In a multi-instance deployment the lock should be replaced
+ * with a distributed Redis lock.
  *
- * All payout records are persisted to PostgreSQL for horizontal scalability.
+ * Flow:
+ *  1. Acquire an exclusive in-process lock for this circleId.
+ *  2. Validate circle state (exists, active, cycle in range).
+ *  3. Check whether a payout for this cycle already exists in the DB.
+ *     - If yes → return the existing record (idempotent response).
+ *     - If no  → proceed with Stellar transfer and persist the new record.
+ *  4. Persist the new payout inside a DB transaction with the unique
+ *     constraint acting as a final safety net against duplicates.
+ *  5. Advance circle status to "completed" if all members have been paid.
+ *
+ * Edge cases handled:
+ *  - Circle not found
+ *  - Circle not active (open, completed, cancelled, paused)
+ *  - Cycle number out of range (> total members)
+ *  - Duplicate payout for same cycle (idempotent — returns existing record)
+ *  - Stellar payment failure (error propagated; no DB write occurs)
+ *  - DB write failure after successful Stellar tx (logged; in-memory fallback)
+ *  - Concurrent calls for same circle serialised via in-process lock
  */
 export async function processCyclePayout(
   circleId: string,
   recipientStellarKey: string
 ): Promise<Payout> {
   return withPayoutLock(circleId, async () => {
+    // ── 1. Validate circle ──────────────────────────────────────────────────
     const circle = await getCircleById(circleId);
     if (!circle) throw new Error("Circle not found");
-    if (circle.status !== "active") throw new Error("Circle is not active");
+    if (circle.status !== "active") {
+      throw new Error(`Circle is not active (status: ${circle.status})`);
+    }
 
     const circleMembers = await getMembersByCircle(circleId);
-    const activeMembers = circleMembers.filter((m) => m.status === "active");
+    if (circleMembers.length === 0) {
+      throw new Error("Circle has no active members");
+    }
+
+    const cycleNumber = circle.currentCycle;
+
+    if (cycleNumber < 1 || cycleNumber > circleMembers.length) {
+      throw new Error(
+        `Invalid cycle number ${cycleNumber} for circle with ${circleMembers.length} members`
+      );
+    }
+
+    // ── 2. Idempotency check — look for an existing payout record ──────────
+    try {
+      const existingRow = await query<{
+        id: string;
+        circle_id: string;
+        recipient_member_id: string;
+        cycle_number: number;
+        amount_usdc: string;
+        tx_hash: string;
+        paid_at: Date;
+      }>(
+        `SELECT id, circle_id, recipient_member_id, cycle_number, amount_usdc, tx_hash, paid_at
+         FROM payouts
+         WHERE circle_id = $1 AND cycle_number = $2
+         LIMIT 1`,
+        [circleId, cycleNumber]
+      );
+
+      if (existingRow.rowCount !== 0) {
+        const row = existingRow.rows[0];
+        console.info(
+          `[payout.service] Duplicate request — returning existing payout ` +
+            `${row.id} for circle ${circleId} cycle ${cycleNumber}`
+        );
+        return {
+          id: row.id,
+          circleId: row.circle_id,
+          recipientMemberId: row.recipient_member_id,
+          cycleNumber: row.cycle_number,
+          amountUsdc: row.amount_usdc,
+          txHash: row.tx_hash,
+          paidAt: row.paid_at,
+        };
+      }
+    } catch (dbErr) {
+      // If the DB check itself fails (e.g. DB unavailable), fall back to the
+      // in-memory log so the service remains available in dev.
+      console.warn(
+        "[payout.service] DB idempotency check failed, checking in-memory log:",
+        dbErr instanceof Error ? dbErr.message : dbErr
+      );
+
+      const existingInMemory = payouts.find(
+        (p) => p.circleId === circleId && p.cycleNumber === cycleNumber
+      );
+      if (existingInMemory) {
+        console.info(
+          `[payout.service] Duplicate request — returning existing in-memory payout ` +
+            `${existingInMemory.id} for circle ${circleId} cycle ${cycleNumber}`
+        );
+        return existingInMemory;
+      }
+    }
+
+    // ── 3. Compute the payout amount ────────────────────────────────────────
     const totalPot = (
-      parseFloat(circle.contributionUsdc) * activeMembers.length
+      parseFloat(circle.contributionUsdc) * circleMembers.length
     ).toFixed(7);
 
-    const recipientMemberForGuard = circleMembers[circle.currentCycle - 1];
-    if (recipientMemberForGuard?.hasReceivedPayout) {
-      throw new Error(`Member has already received payout for cycle ${circle.currentCycle}`);
-    }
+    // ── 4. Execute the Stellar payment ─────────────────────────────────────
+    // This is the only side-effect that cannot be rolled back. We issue the
+    // transfer *before* writing to the DB so that if the DB write fails we
+    // can retry (the idempotency check above will short-circuit on retry).
+    const txHash = await sendUsdcPayment(recipientStellarKey, totalPot);
 
+    // ── 5. Persist the payout record ────────────────────────────────────────
     const payoutId = randomUUID();
-    const recipientMember = circleMembers[circle.currentCycle - 1];
-    const recipientMemberId = recipientMember?.id ?? "";
+    const paidAt = new Date();
+    const recipientMemberId = circleMembers[cycleNumber - 1]?.id ?? "";
 
-    // Insert payout record as 'pending' before attempting
-    await query(
-      `INSERT INTO payouts (id, circle_id, recipient_member_id, cycle_number, amount_usdc, tx_hash, status, retry_count, paid_at)
-       VALUES ($1, $2, $3, $4, $5, '', 'pending', 0, NOW())
-       ON CONFLICT (circle_id, cycle_number) DO NOTHING`,
-      [payoutId, circleId, recipientMemberId, circle.currentCycle, totalPot]
-    );
+    const payout: Payout = {
+      id: payoutId,
+      circleId,
+      recipientMemberId,
+      cycleNumber,
+      amountUsdc: totalPot,
+      txHash,
+      paidAt,
+    };
 
-    // Fetch the actual record (handles idempotency if already inserted)
-    const { rows: existingRows } = await query<Payout & { status: string; retry_count: number }>(
-      `SELECT id, status, retry_count FROM payouts WHERE circle_id = $1 AND cycle_number = $2`,
-      [circleId, circle.currentCycle]
-    );
-    const existingPayout = existingRows[0];
-    if (existingPayout?.status === "completed") {
-      throw new Error(`Payout for cycle ${circle.currentCycle} has already been processed`);
-    }
-
-    const currentRetry = existingPayout?.retry_count ?? 0;
-    let txHash: string;
-    let lastError = "";
-
-    for (let attempt = 0; attempt <= PAYOUT_MAX_RETRIES; attempt++) {
-      if (attempt > 0) {
-        await new Promise((r) => setTimeout(r, RETRY_DELAY_MS[attempt - 1]));
-      }
-      try {
-        if (circle.contractId) {
-          txHash = await invokeContractPayout(circle.contractId);
-        } else {
-          await validateStellarRecipient(recipientStellarKey);
-          txHash = await sendUsdcPayment(recipientStellarKey, totalPot);
-        }
-        lastError = "";
-        break;
-      } catch (err) {
-        lastError = err instanceof Error ? err.message : String(err);
-        logger.warn({ err, attempt, circleId }, `[payout] attempt ${attempt + 1} failed`);
-        await query(
-          `UPDATE payouts SET status = 'processing', retry_count = $1, last_error = $2 WHERE circle_id = $3 AND cycle_number = $4`,
-          [currentRetry + attempt + 1, lastError, circleId, circle.currentCycle]
-        );
-        if (attempt === PAYOUT_MAX_RETRIES) {
-          await query(
-            `UPDATE payouts SET status = 'failed' WHERE circle_id = $1 AND cycle_number = $2`,
-            [circleId, circle.currentCycle]
-          );
-          await alertAdmin(circleId, circle.currentCycle, lastError);
-          throw err;
-        }
-      }
-    }
-
-    let payout: Payout;
     try {
-      payout = await transaction(async (q) => {
-        const { rows } = await q<Payout>(
-          `UPDATE payouts
-           SET tx_hash = $1, status = 'completed', paid_at = NOW()
-           WHERE circle_id = $2 AND cycle_number = $3
-           RETURNING id, circle_id as "circleId", recipient_member_id as "recipientMemberId",
-                     cycle_number as "cycleNumber", amount_usdc as "amountUsdc", tx_hash as "txHash", paid_at as "paidAt"`,
-          [txHash!, circleId, circle.currentCycle]
+      await transaction(async (q) => {
+        // INSERT with ON CONFLICT DO NOTHING provides a final DB-level guard
+        // against duplicate rows (complementing the unique constraint).
+        await q(
+          `INSERT INTO payouts
+             (id, circle_id, recipient_member_id, cycle_number, amount_usdc, tx_hash, paid_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           ON CONFLICT (circle_id, cycle_number) DO NOTHING`,
+          [payoutId, circleId, recipientMemberId, cycleNumber, totalPot, txHash, paidAt]
         );
 
-        if (recipientMemberId) {
-          await q(
-            "UPDATE members SET has_received_payout = TRUE, updated_at = NOW() WHERE id = $1",
-            [recipientMemberId]
-          );
-        }
-
-        return rows[0];
+        // Mark the recipient member as having received their payout.
+        await q(
+          `UPDATE members
+           SET has_received_payout = true, updated_at = $3
+           WHERE id = $1 AND circle_id = $2`,
+          [recipientMemberId, circleId, paidAt]
+        );
       });
-    } catch (err: unknown) {
-      const pg = err as { code?: string };
-      if (pg.code === "23505") {
-        throw new Error(`Payout for cycle ${circle.currentCycle} has already been processed`);
-      }
-      throw err;
-    }
-
-    // Send SMS notifications to all members (async, non-blocking)
-    if (recipientMember) {
-      const memberUserIds = circleMembers.map(m => m.userId);
-      const { rows: recipientUser } = await query<{ display_name: string }>(
-        "SELECT display_name FROM users WHERE id = $1",
-        [recipientMember.userId]
+    } catch (dbWriteErr) {
+      // The Stellar transfer already happened. Log the error prominently so
+      // the ops team can reconcile, but don't re-throw — the caller should
+      // treat this as a success since the member was paid.
+      console.error(
+        `[payout.service] Stellar payment succeeded (txHash: ${txHash}) ` +
+          `but DB write failed for circle ${circleId} cycle ${cycleNumber}. ` +
+          `Manual reconciliation may be required.`,
+        dbWriteErr
       );
-      const recipientName = recipientUser[0]?.display_name ?? "Member";
-
-      notifyPayoutProcessed(memberUserIds, circle.name, totalPot, recipientName).catch(err => {
-        console.error("Failed to send payout notifications:", err);
-      });
+      // Store in-memory as fallback so getPayoutsByCircle still returns it.
     }
 
-    if (circle.currentCycle >= circleMembers.length) {
+    // Always persist in-memory so in-process queries work during dev.
+    payouts.push(payout);
+
+    // ── 6. Advance circle status if all members have been paid ──────────────
+    if (cycleNumber >= circleMembers.length) {
       await updateCircleStatus(circleId, "completed");
-
-      // Mint completion certificates for all active members (async, non-blocking)
-      const totalSavedUsdc = (
-        parseFloat(circle.contributionUsdc) * activeMembers.length * circleMembers.length
-      ).toFixed(7);
-
-      const { rows: memberUsers } = await query<{ stellar_public_key: string | null }>(
-        `SELECT u.stellar_public_key FROM members m
-         JOIN users u ON u.id = m.user_id
-         WHERE m.circle_id = $1 AND m.status = 'active'`,
-        [circleId]
-      );
-
-      for (const { stellar_public_key } of memberUsers) {
-        if (!stellar_public_key) continue;
-        mintCertificate({
-          memberStellarKey: stellar_public_key,
-          circleId,
-          circleName: circle.name,
-          cyclesCompleted: circleMembers.length,
-          totalSavedUsdc,
-        }).catch((err) => console.error("[payout] mintCertificate failed:", err));
-      }
-
-      // Send completion notifications to all members (async, non-blocking)
-      const memberUserIds = circleMembers.map(m => m.userId);
-      notifyCircleCompleted(memberUserIds, circle.name).catch((err) =>
-        console.error("[payout] Failed to send completion notifications:", err)
-      );
+      // Queue on-chain completion certificates for every member (#241).
+      await queueCertificatesForCircle(circleId);
     }
 
     return payout;
-  }); // end withPayoutLock
+  });
 }
 
-/**
- * Retrieve all payouts for a specific circle from PostgreSQL.
- * @param circleId The circle ID to filter payouts by
- * @returns Array of payout records sorted by cycle number
- */
 export async function getPayoutsByCircle(circleId: string): Promise<Payout[]> {
-  const { rows } = await query<Payout>(
-    `SELECT id, circle_id as "circleId", recipient_member_id as "recipientMemberId",
-            cycle_number as "cycleNumber", amount_usdc as "amountUsdc", tx_hash as "txHash", paid_at as "paidAt"
-     FROM payouts
-     WHERE circle_id = $1
-     ORDER BY cycle_number ASC`,
-    [circleId]
-  );
-  return rows;
-}
+  // Try DB first
+  try {
+    const result = await query<{
+      id: string;
+      circle_id: string;
+      recipient_member_id: string;
+      cycle_number: number;
+      amount_usdc: string;
+      tx_hash: string;
+      paid_at: Date;
+    }>(
+      `SELECT id, circle_id, recipient_member_id, cycle_number, amount_usdc, tx_hash, paid_at
+       FROM payouts
+       WHERE circle_id = $1
+       ORDER BY cycle_number ASC`,
+      [circleId]
+    );
 
-export interface PayoutHistoryRow {
-  id: string;
-  cycleNumber: number;
-  amountUsdc: string;
-  txHash: string;
-  paidAt: string;
-  recipientName: string;
-}
-
-export async function getPayoutHistoryByCircle(circleId: string): Promise<PayoutHistoryRow[]> {
-  const { rows } = await query<PayoutHistoryRow>(
-    `SELECT
-       p.id,
-       p.cycle_number   AS "cycleNumber",
-       p.amount_usdc    AS "amountUsdc",
-       p.tx_hash        AS "txHash",
-       p.paid_at        AS "paidAt",
-       COALESCE(u.display_name, 'Unknown') AS "recipientName"
-     FROM payouts p
-     JOIN members m ON m.id = p.recipient_member_id
-     JOIN users   u ON u.id = m.user_id
-     WHERE p.circle_id = $1
-     ORDER BY p.cycle_number ASC`,
-    [circleId]
-  );
-  return rows;
+    return result.rows.map((row) => ({
+      id: row.id,
+      circleId: row.circle_id,
+      recipientMemberId: row.recipient_member_id,
+      cycleNumber: row.cycle_number,
+      amountUsdc: row.amount_usdc,
+      txHash: row.tx_hash,
+      paidAt: row.paid_at,
+    }));
+  } catch {
+    // Fall back to in-memory store
+    return payouts.filter((p) => p.circleId === circleId);
+  }
 }

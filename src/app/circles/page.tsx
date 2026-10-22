@@ -1,69 +1,92 @@
 import type { Metadata } from "next";
-import { listOpenCircles } from "@/server/services/circle.service";
-import { CircleCard } from "@/components/circle/CircleCard";
-import { CircleFilters } from "@/components/circle/CircleFilters";
-import { Pagination } from "@/components/ui/Pagination";
+import { Suspense } from "react";
+import { listCircles } from "@/server/services/circle.service";
+import { PaginatedCircleList } from "@/components/circle/PaginatedCircleList";
+import { CircleFiltersForm } from "@/components/circle/CircleFiltersForm";
+import type { CircleFilters } from "@/types";
 import Link from "next/link";
 import styles from "./page.module.css";
 
 export const metadata: Metadata = { title: "Browse Circles" };
 
-const PAGE_SIZE = 20;
-
-interface Props {
+interface CirclesPageProps {
   searchParams: {
-    page?: string;
+    status?: string;
     frequency?: string;
     minAmount?: string;
     maxAmount?: string;
+    maxMembers?: string;
     search?: string;
-    status?: string;
-    currency?: string;
+    page?: string;
+    cursor?: string;
+    filter?: string;
   };
 }
 
-export default async function CirclesPage({ searchParams }: Props) {
-  const page = Math.max(1, parseInt(searchParams.page ?? "1", 10));
-  const { data: circles, total } = await listOpenCircles(page, PAGE_SIZE, {
-    frequency: searchParams.frequency as any,
+/**
+ * Circles listing page with filter support.
+ *
+ * Filters are read from URL search params so that filtered URLs are
+ * shareable and server-rendered on every navigation. The filter form
+ * (client component) updates the URL; this page re-renders on the
+ * server with the new params.
+ */
+export default async function CirclesPage({ searchParams }: CirclesPageProps) {
+  // Parse filter params from URL (all optional)
+  const filters: CircleFilters = {
+    status: (searchParams.status as CircleFilters["status"]) || undefined,
+    frequency: (searchParams.frequency as CircleFilters["frequency"]) || undefined,
     minAmount: searchParams.minAmount ? parseInt(searchParams.minAmount, 10) : undefined,
     maxAmount: searchParams.maxAmount ? parseInt(searchParams.maxAmount, 10) : undefined,
-    search: searchParams.search,
-    status: searchParams.status as any,
-    currency: searchParams.currency,
-  });
+    maxMembers: searchParams.maxMembers ? parseInt(searchParams.maxMembers, 10) : undefined,
+    search: searchParams.search || undefined,
+  };
 
-  const heading = searchParams.status
-    ? `${searchParams.status.charAt(0).toUpperCase() + searchParams.status.slice(1)} Circles`
-    : "Open Circles";
+  const circles = await listCircles(filters);
+
+  const hasActiveFilters =
+    !!filters.status ||
+    !!filters.frequency ||
+    !!filters.search ||
+    filters.minAmount !== undefined ||
+    filters.maxAmount !== undefined ||
+    filters.maxMembers !== undefined;
 
   return (
     <div className={styles.page}>
       <div className="container">
         <div className={styles.header}>
-          <h1 className={styles.title}>{heading}</h1>
-          <Link href="/circles/create" className="btn btn--accent">+ New Circle</Link>
+          <h1 className={styles.title}>Open Circles</h1>
+          <Link href="/circles/create" className="btn btn--accent">
+            + New Circle
+          </Link>
         </div>
 
-        <CircleFilters />
+        {/* Filter controls — wrapped in Suspense because it uses useSearchParams */}
+        <Suspense fallback={null}>
+          <CircleFiltersForm filters={filters} />
+        </Suspense>
 
         {circles.length === 0 ? (
           <div className={styles.empty}>
-            <p>{page > 1 ? "No more circles on this page." : "No circles found matching your criteria."}</p>
-            {page > 1
-              ? <Link href="/circles" className="btn btn--secondary">Back to first page</Link>
-              : <Link href="/circles" className="btn btn--secondary">Clear all filters</Link>
-            }
+            {hasActiveFilters ? (
+              <>
+                <p>No circles match your filters.</p>
+                <Link href="/circles" className="btn btn--primary">
+                  Clear filters
+                </Link>
+              </>
+            ) : (
+              <>
+                <p>No open circles yet.</p>
+                <Link href="/circles/create" className="btn btn--primary">
+                  Be the first to create one
+                </Link>
+              </>
+            )}
           </div>
         ) : (
-          <>
-            <div className={styles.grid}>
-              {circles.map((circle) => (
-                <CircleCard key={circle.id} circle={circle} members={[]} showJoin />
-              ))}
-            </div>
-            <Pagination page={page} total={total} limit={PAGE_SIZE} />
-          </>
+          <PaginatedCircleList circles={circles} />
         )}
       </div>
     </div>

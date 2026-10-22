@@ -6,6 +6,7 @@ import { getPayoutHistoryByCircle } from "@/server/services/payout.service";
 import { getContributionsByCircle } from "@/server/services/contribution.service";
 import { CircleStatusBadge } from "@/components/ui/CircleStatusBadge";
 import { CopyButton } from "@/components/ui/CopyButton";
+import { CircleProgressBar } from "@/components/circle/CircleProgressBar";
 import { MemberPayoutList } from "@/components/circle/MemberPayoutList";
 import { CircleActions } from "@/components/circle/CircleActions";
 import { PayoutCountdown } from "@/components/circle/PayoutCountdown";
@@ -125,6 +126,18 @@ export default async function CircleDetailPage({ params }: Props) {
           </div>
         )}
 
+        {/* Show waitlist card when circle is full and the user is not already a member */}
+        {userId && !isMember && members.length >= circle.maxMembers && (
+          <div style={{ marginBottom: "var(--space-6)" }}>
+            <CircleWaitlist
+              circleId={circle.id}
+              circleName={circle.name}
+              initialIsOnWaitlist={isOnWaitlist}
+              initialPosition={waitlistPosition}
+            />
+          </div>
+        )}
+
         <div className={styles.grid}>
           <div className="card" style={{ gridColumn: "1 / -1" }}>
             <h2 className={styles.sectionTitle}>Payout History</h2>
@@ -139,6 +152,17 @@ export default async function CircleDetailPage({ params }: Props) {
           <div className="card">
             <h2 className={styles.sectionTitle}>Circle Details</h2>
             
+            {/* Rotation progress visualiser (issue #197) */}
+            {circle.status !== "open" && (
+              <div style={{ marginBottom: "var(--space-6)" }}>
+                <CircleProgressBar
+                  currentCycle={circle.currentCycle}
+                  totalCycles={circle.maxMembers}
+                  status={circle.status}
+                />
+              </div>
+            )}
+
             {circle.nextPayoutAt && circle.status === "active" && (
               <div style={{ marginBottom: "var(--space-6)" }}>
                 <PayoutCountdown nextPayoutAt={circle.nextPayoutAt} />

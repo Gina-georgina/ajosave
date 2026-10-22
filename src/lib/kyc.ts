@@ -15,8 +15,10 @@
  */
 import { createHmac } from "crypto";
 import { query } from "./db";
+import { outboundPolicy, safeFetch } from "./ssrf";
 
 const BASE_URL = "https://testapi.smileidentity.com/v1";
+const KYC_POLICY = outboundPolicy({ allowedHosts: ["testapi.smileidentity.com"] });
 
 export type KycStatus = "none" | "pending" | "approved" | "rejected";
 
@@ -26,7 +28,7 @@ export async function initiateKyc(userId: string): Promise<{ token: string }> {
   const apiKey = requireEnv("SMILE_API_KEY");
   const callbackUrl = requireEnv("SMILE_CALLBACK_URL");
 
-  const res = await fetch(`${BASE_URL}/token`, {
+  const res = await safeFetch(`${BASE_URL}/token`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -36,7 +38,7 @@ export async function initiateKyc(userId: string): Promise<{ token: string }> {
       user_id: userId,
       product: "ekyc_smartselfie",
     }),
-  });
+  }, KYC_POLICY);
 
   if (!res.ok) {
     const text = await res.text();
@@ -47,7 +49,7 @@ export async function initiateKyc(userId: string): Promise<{ token: string }> {
 
   // Mark user as pending
   await query(
-    "UPDATE users SET kyc_status = 'pending' WHERE id = $1",
+    "UPDATE users SET kyc_status = 'pending', kyc_submitted_at = NOW() WHERE id = $1 AND kyc_status <> 'approved'",
     [userId]
   );
 
@@ -84,11 +86,17 @@ export async function handleKycWebhook(
   // ResultCode "1012" = Approved; anything else is treated as rejected
   const status: KycStatus = payload.ResultCode === "1012" ? "approved" : "rejected";
 
+  // Derive tier from status (Issue #223):
+  // approved → full, rejected → unverified, pending is set on initiation
+  const tier = status === "approved" ? "full" : "unverified";
+
   await query(
     `UPDATE users
-     SET kyc_status = $1, kyc_verified_at = CASE WHEN $1 = 'approved' THEN NOW() ELSE NULL END
-     WHERE id = $2`,
-    [status, userId]
+     SET kyc_status = $1,
+         kyc_tier = $2,
+         kyc_verified_at = CASE WHEN $1 = 'approved' THEN NOW() ELSE NULL END
+     WHERE id = $3`,
+    [status, tier, userId]
   );
 
   return { userId, status };

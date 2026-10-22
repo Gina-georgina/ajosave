@@ -1,8 +1,18 @@
 @import "./tokens.css";
+@import "./dark-mode-contrast.css";
 
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
 
-html { font-size: 16px; scroll-behavior: smooth; }
+html {
+  font-size: 16px;
+  scroll-behavior: smooth;
+}
 
 body {
   font-family: var(--font-sans);
@@ -13,16 +23,43 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-img, video { max-width: 100%; height: auto; display: block; }
-a { color: inherit; text-decoration: none; }
-button { cursor: pointer; border: none; background: none; font-family: inherit; }
-input, textarea, select { font-family: inherit; font-size: inherit; }
-ul, ol { list-style: none; }
+img,
+video {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+a {
+  color: inherit;
+  text-decoration: none;
+}
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+  font-family: inherit;
+}
+input,
+textarea,
+select {
+  font-family: inherit;
+  font-size: inherit;
+}
+ul,
+ol {
+  list-style: none;
+}
 
 .sr-only {
-  position: absolute; width: 1px; height: 1px; padding: 0;
-  margin: -1px; overflow: hidden; clip: rect(0,0,0,0);
-  white-space: nowrap; border-width: 0;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
 }
 
 .container {
@@ -31,8 +68,12 @@ ul, ol { list-style: none; }
   margin-inline: auto;
   padding-inline: var(--space-6);
 }
-.container--sm { max-width: var(--max-width-sm); }
-.container--content { max-width: var(--max-width-content); }
+.container--sm {
+  max-width: var(--max-width-sm);
+}
+.container--content {
+  max-width: var(--max-width-content);
+}
 
 :focus-visible {
   outline: 2px solid var(--color-brand-primary);
@@ -71,4 +112,46 @@ ul, ol { list-style: none; }
 @keyframes skeleton-shimmer {
   0%   { background-position: 200% 0; }
   100% { background-position: -200% 0; }
+}
+
+/* ─── Reduced-motion support ──────────────────────────────────────────────── */
+/*
+ * Respect the operating-system / browser "prefers-reduced-motion" setting.
+ *
+ * Users who enable this preference (e.g. those with vestibular disorders,
+ * epilepsy, or other motion sensitivities) should not be subjected to
+ * animations that could cause discomfort or harm.
+ *
+ * Strategy:
+ *  1. Globally disable all animations and transitions.
+ *  2. Override the skeleton loader so it falls back to a static tinted
+ *     background instead of the moving shimmer.
+ *  3. Collapse scroll-behavior to `auto` so page anchors jump instantly
+ *     rather than smoothly scrolling.
+ *  4. Preserve functional transitions (e.g. focus ring) that carry
+ *     semantic meaning — these are already short enough to be acceptable,
+ *     but we zero them out here for maximum safety.
+ */
+@media (prefers-reduced-motion: reduce) {
+  /* Kill all animations and transitions site-wide */
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* Static fallback for the skeleton loader — replace gradient animation
+     with a solid mid-tone that still signals "loading" without movement */
+  .skeleton {
+    background: var(--color-bg-elevated);
+    animation: none;
+  }
+
+  /* Ensure smooth-scroll on <html> does not override the rule above */
+  html {
+    scroll-behavior: auto;
+  }
 }

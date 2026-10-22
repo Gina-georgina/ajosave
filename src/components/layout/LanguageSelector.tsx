@@ -2,6 +2,7 @@
 
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { buildLocaleCookie } from "@/lib/cookies";
 
 const LOCALES = [
   { code: "en", label: "English" },
@@ -16,7 +17,7 @@ export function LanguageSelector({ currentLocale }: { currentLocale: string }) {
 
   function handleChange(e: React.ChangeEvent<HTMLSelectElement>) {
     const locale = e.target.value;
-    document.cookie = `locale=${locale};path=/;max-age=31536000`;
+    document.cookie = buildLocaleCookie(locale, window.location.protocol === "https:");
     startTransition(() => router.refresh());
   }
 
